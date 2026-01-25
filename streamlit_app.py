@@ -1235,34 +1235,34 @@ def main():
 
             mermaid_a = """
 flowchart TB
-    subgraph Sources["Source Systems"]
-        SF[("Snowflake\\nData Warehouse")]
+    subgraph Sources[Source Systems]
+        SF[(Snowflake)]
     end
 
-    subgraph Sprawl["Ungoverned Semantic Models"]
-        M1["Sales Model v1"]
-        M2["Sales Model v2"]
-        M3["Finance Model"]
-        M4["Marketing Model"]
-        M5["Ops Model"]
-        M6["Executive Model"]
+    subgraph Sprawl[Ungoverned Semantic Models]
+        M1[Sales Model v1]
+        M2[Sales Model v2]
+        M3[Finance Model]
+        M4[Marketing Model]
+        M5[Ops Model]
+        M6[Executive Model]
     end
 
-    subgraph Reports["Reports & Dashboards"]
-        R1["Sales Dashboard"]
-        R2["Revenue Report"]
-        R3["Finance Dashboard"]
-        R4["Campaign Analytics"]
-        R5["Ops Metrics"]
-        R6["Exec Summary"]
+    subgraph Reports[Reports]
+        R1[Sales Dashboard]
+        R2[Revenue Report]
+        R3[Finance Dashboard]
+        R4[Campaign Analytics]
+        R5[Ops Metrics]
+        R6[Exec Summary]
     end
 
-    SF -->|"Query"| M1
-    SF -->|"Query"| M2
-    SF -->|"Query"| M3
-    SF -->|"Query"| M4
-    SF -->|"Query"| M5
-    SF -->|"Query"| M6
+    SF -->|Query| M1
+    SF -->|Query| M2
+    SF -->|Query| M3
+    SF -->|Query| M4
+    SF -->|Query| M5
+    SF -->|Query| M6
 
     M1 --> R1
     M2 --> R2
@@ -1270,10 +1270,6 @@ flowchart TB
     M4 --> R4
     M5 --> R5
     M6 --> R6
-
-    style Sources fill:#29B5E8
-    style Sprawl fill:#FF6B6B
-    style Reports fill:#E8E8E8
 """
             render_mermaid(mermaid_a, height=450)
 
@@ -1292,28 +1288,28 @@ flowchart TB
 
             mermaid_b = """
 flowchart TB
-    subgraph Sources["Source Systems"]
-        SF[("Snowflake\\nData Warehouse")]
+    subgraph Sources[Source Systems]
+        SF[(Snowflake)]
     end
 
-    subgraph Fabric["Microsoft Fabric Serving Layer"]
-        LH[("Lakehouse/Warehouse\\nCurated Data")]
-        subgraph Governed["Certified Semantic Models"]
-            SM1["Enterprise Sales Model"]
-            SM2["Enterprise Finance Model"]
+    subgraph Fabric[Microsoft Fabric]
+        LH[(Lakehouse)]
+        subgraph Governed[Certified Models]
+            SM1[Enterprise Sales Model]
+            SM2[Enterprise Finance Model]
         end
     end
 
-    subgraph Reports["Reports & Dashboards"]
-        R1["Sales Dashboard"]
-        R2["Revenue Report"]
-        R3["Finance Dashboard"]
-        R4["Campaign Analytics"]
-        R5["Ops Metrics"]
-        R6["Exec Summary"]
+    subgraph Reports[Reports]
+        R1[Sales Dashboard]
+        R2[Revenue Report]
+        R3[Finance Dashboard]
+        R4[Campaign Analytics]
+        R5[Ops Metrics]
+        R6[Exec Summary]
     end
 
-    SF -->|"ETL Once"| LH
+    SF -->|ETL Once| LH
     LH --> SM1
     LH --> SM2
 
@@ -1323,11 +1319,6 @@ flowchart TB
     SM2 --> R3
     SM2 --> R5
     SM2 --> R6
-
-    style Sources fill:#29B5E8
-    style Fabric fill:#0078D4
-    style Governed fill:#107C10
-    style Reports fill:#E8E8E8
 """
             render_mermaid(mermaid_b, height=450)
 
