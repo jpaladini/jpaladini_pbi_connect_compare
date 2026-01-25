@@ -15,11 +15,34 @@ Author: Data Platform Engineering
 """
 
 import streamlit as st
+import streamlit.components.v1 as components
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from typing import Dict, Any, Tuple, Optional
 from dataclasses import dataclass
+
+
+# =============================================================================
+# MERMAID DIAGRAM RENDERING
+# =============================================================================
+
+def render_mermaid(mermaid_code: str, height: int = 400) -> None:
+    """Render a Mermaid diagram using HTML components."""
+    html_code = f"""
+    <html>
+    <head>
+        <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+        <script>mermaid.initialize({{startOnLoad:true, theme:'neutral'}});</script>
+    </head>
+    <body>
+        <div class="mermaid">
+{mermaid_code}
+        </div>
+    </body>
+    </html>
+    """
+    components.html(html_code, height=height)
 
 
 # =============================================================================
@@ -626,6 +649,12 @@ def main():
         st.session_state.preset_applied = None
 
     # ==========================================================================
+    # MAIN TABS
+    # ==========================================================================
+
+    tab_cost, tab_governance = st.tabs(["Cost Analysis", "Architecture & Governance Case"])
+
+    # ==========================================================================
     # SIDEBAR: Configuration
     # ==========================================================================
 
@@ -899,274 +928,639 @@ def main():
     breakpoint = find_breakpoint(sweep_df)
 
     # ==========================================================================
-    # SECTION A: Executive Summary
+    # TAB 1: COST ANALYSIS
     # ==========================================================================
 
-    st.header("A. Executive Summary")
-
+    # Compute winner for both tabs
     cost_diff = cost_a.total_cost - cost_b.total_cost
     winner = "B" if cost_diff > 0 else "A"
 
-    # Determine color scheme
-    if winner == "B":
-        recommendation = "Architecture B (Fabric) is recommended"
-    else:
-        recommendation = "Architecture A (Snowflake) is currently cheaper"
+    # ==========================================================================
+    # TAB 1: COST ANALYSIS
+    # ==========================================================================
 
-    col1, col2, col3 = st.columns(3)
+    with tab_cost:
 
-    with col1:
-        st.metric(
-            label="Architecture A: Snowflake-fed",
-            value=f"${cost_a.total_cost:,.0f}/mo",
-            delta=f"-${abs(cost_diff):,.0f}" if winner == "A" else f"+${abs(cost_diff):,.0f}",
-            delta_color="normal" if winner == "A" else "inverse",
-        )
+        # ======================================================================
+        # SECTION A: Executive Summary
+        # ======================================================================
 
-    with col2:
-        st.metric(
-            label="Architecture B: Fabric Serving",
-            value=f"${cost_b.total_cost:,.0f}/mo",
-            delta=f"-${abs(cost_diff):,.0f}" if winner == "B" else f"+${abs(cost_diff):,.0f}",
-            delta_color="normal" if winner == "B" else "inverse",
-        )
+        st.header("A. Executive Summary")
 
-    with col3:
-        if breakpoint:
-            st.metric(
-                label="Breakeven Point",
-                value=f"{breakpoint} models",
-                delta=f"Currently at {num_models}",
-            )
+        # Determine color scheme
+        if winner == "B":
+            recommendation = "Architecture B (Fabric) is recommended"
         else:
+            recommendation = "Architecture A (Snowflake) is currently cheaper"
+
+        col1, col2, col3 = st.columns(3)
+
+        with col1:
             st.metric(
-                label="Breakeven Point",
-                value="N/A",
-                delta="No crossover in range",
+                label="Architecture A: Snowflake-fed",
+                value=f"${cost_a.total_cost:,.0f}/mo",
+                delta=f"-${abs(cost_diff):,.0f}" if winner == "A" else f"+${abs(cost_diff):,.0f}",
+                delta_color="normal" if winner == "A" else "inverse",
             )
 
-    # Big summary card
-    if winner == "B":
-        st.success(
-            f"**{recommendation}**: Architecture B is **${abs(cost_diff):,.0f}/month cheaper** "
-            f"and offers lower duplication/ops risk at {num_models} models."
-        )
-    else:
-        st.info(
-            f"**{recommendation}**: Architecture A is **${abs(cost_diff):,.0f}/month cheaper** "
-            f"at {num_models} models. Consider re-evaluating as you scale."
-        )
-
-    # ==========================================================================
-    # SECTION B: Cost Comparison Breakdown
-    # ==========================================================================
-
-    st.header("B. Cost Comparison Breakdown")
-
-    col1, col2 = st.columns([2, 1])
-
-    with col1:
-        fig_breakdown = plot_cost_breakdown(cost_a, cost_b)
-        st.pyplot(fig_breakdown)
-        plt.close(fig_breakdown)
-
-    with col2:
-        st.subheader("Cost Details")
-
-        breakdown_data = {
-            "Component": ["Compute", "Licensing", "Egress", "Ops Overhead", "Fabric Serving", "TOTAL"],
-            "Arch A ($)": [
-                f"{cost_a.compute_cost:,.0f}",
-                f"{cost_a.licensing_cost:,.0f}",
-                f"{cost_a.egress_cost:,.0f}",
-                f"{cost_a.ops_overhead_cost:,.0f}",
-                "---",
-                f"{cost_a.total_cost:,.0f}",
-            ],
-            "Arch B ($)": [
-                f"{cost_b.compute_cost:,.0f}",
-                f"{cost_b.licensing_cost:,.0f}",
-                f"{cost_b.egress_cost:,.0f}",
-                f"{cost_b.ops_overhead_cost:,.0f}",
-                f"{cost_b.fabric_serving_cost:,.0f}",
-                f"{cost_b.total_cost:,.0f}",
-            ],
-        }
-
-        st.table(pd.DataFrame(breakdown_data))
-
-    # ==========================================================================
-    # SECTION C: Breakpoint Chart
-    # ==========================================================================
-
-    st.header("C. Breakpoint Analysis")
-
-    fig_breakpoint = plot_breakpoint(sweep_df, num_models)
-    st.pyplot(fig_breakpoint)
-    plt.close(fig_breakpoint)
-
-    if breakpoint:
-        st.markdown(
-            f"**Interpretation**: At approximately **{breakpoint} semantic models**, "
-            f"Architecture B becomes more cost-effective. You currently have **{num_models} models**."
-        )
-        if num_models >= breakpoint:
-            st.success("You are past the breakpoint -- consolidating on Fabric is recommended.")
-        else:
-            st.warning(
-                f"You are {breakpoint - num_models} models away from breakpoint. "
-                f"Plan for Fabric migration as you grow."
+        with col2:
+            st.metric(
+                label="Architecture B: Fabric Serving",
+                value=f"${cost_b.total_cost:,.0f}/mo",
+                delta=f"-${abs(cost_diff):,.0f}" if winner == "B" else f"+${abs(cost_diff):,.0f}",
+                delta_color="normal" if winner == "B" else "inverse",
             )
-    else:
-        if cost_b.total_cost < cost_a.total_cost:
-            st.success("Architecture B is cheaper across the entire range analyzed (1-100 models).")
+
+        with col3:
+            if breakpoint:
+                st.metric(
+                    label="Breakeven Point",
+                    value=f"{breakpoint} models",
+                    delta=f"Currently at {num_models}",
+                )
+            else:
+                st.metric(
+                    label="Breakeven Point",
+                    value="N/A",
+                    delta="No crossover in range",
+                )
+
+        # Big summary card
+        if winner == "B":
+            st.success(
+                f"**{recommendation}**: Architecture B is **${abs(cost_diff):,.0f}/month cheaper** "
+                f"and offers lower duplication/ops risk at {num_models} models."
+            )
         else:
             st.info(
-                "No crossover detected in the 1-100 model range. "
-                "Architecture A remains cheaper, but this may change with different parameters."
+                f"**{recommendation}**: Architecture A is **${abs(cost_diff):,.0f}/month cheaper** "
+                f"at {num_models} models. Consider re-evaluating as you scale."
             )
 
+        # ======================================================================
+        # SECTION B: Cost Comparison Breakdown
+        # ======================================================================
+
+        st.header("B. Cost Comparison Breakdown")
+
+        col1, col2 = st.columns([2, 1])
+
+        with col1:
+            fig_breakdown = plot_cost_breakdown(cost_a, cost_b)
+            st.pyplot(fig_breakdown)
+            plt.close(fig_breakdown)
+
+        with col2:
+            st.subheader("Cost Details")
+
+            breakdown_data = {
+                "Component": ["Compute", "Licensing", "Egress", "Ops Overhead", "Fabric Serving", "TOTAL"],
+                "Arch A ($)": [
+                    f"{cost_a.compute_cost:,.0f}",
+                    f"{cost_a.licensing_cost:,.0f}",
+                    f"{cost_a.egress_cost:,.0f}",
+                    f"{cost_a.ops_overhead_cost:,.0f}",
+                    "---",
+                    f"{cost_a.total_cost:,.0f}",
+                ],
+                "Arch B ($)": [
+                    f"{cost_b.compute_cost:,.0f}",
+                    f"{cost_b.licensing_cost:,.0f}",
+                    f"{cost_b.egress_cost:,.0f}",
+                    f"{cost_b.ops_overhead_cost:,.0f}",
+                    f"{cost_b.fabric_serving_cost:,.0f}",
+                    f"{cost_b.total_cost:,.0f}",
+                ],
+            }
+
+            st.table(pd.DataFrame(breakdown_data))
+
+        # ======================================================================
+        # SECTION C: Breakpoint Chart
+        # ======================================================================
+
+        st.header("C. Breakpoint Analysis")
+
+        fig_breakpoint = plot_breakpoint(sweep_df, num_models)
+        st.pyplot(fig_breakpoint)
+        plt.close(fig_breakpoint)
+
+        if breakpoint:
+            st.markdown(
+                f"**Interpretation**: At approximately **{breakpoint} semantic models**, "
+                f"Architecture B becomes more cost-effective. You currently have **{num_models} models**."
+            )
+            if num_models >= breakpoint:
+                st.success("You are past the breakpoint -- consolidating on Fabric is recommended.")
+            else:
+                st.warning(
+                    f"You are {breakpoint - num_models} models away from breakpoint. "
+                    f"Plan for Fabric migration as you grow."
+                )
+        else:
+            if cost_b.total_cost < cost_a.total_cost:
+                st.success("Architecture B is cheaper across the entire range analyzed (1-100 models).")
+            else:
+                st.info(
+                    "No crossover detected in the 1-100 model range. "
+                    "Architecture A remains cheaper, but this may change with different parameters."
+                )
+
+        # ======================================================================
+        # SECTION D: Phase Portrait (Optional)
+        # ======================================================================
+
+        with st.expander("D. Cost Dynamics: Unit Cost Phase Portrait (Advanced)"):
+            st.markdown("""
+            This visualization shows how **unit cost per model** evolves as model count increases.
+
+            - **Coral arrows/line**: Architecture A -- unit cost tends to drift upward with sprawl
+            - **Blue arrows/line**: Architecture B -- unit cost decreases as fixed Fabric cost is amortized
+            """)
+
+            fig_quiver = plot_quiver(params, sweep_df)
+            st.pyplot(fig_quiver)
+            plt.close(fig_quiver)
+
+        # ======================================================================
+        # SECTION E: Recommendations
+        # ======================================================================
+
+        st.header("E. Recommendations")
+
+        if winner == "B":
+            st.markdown("### What to Do Next (Architecture B Wins)")
+            st.markdown("""
+            1. **Land curated serving tables into Fabric** -- Create a Lakehouse or Warehouse
+               with pre-aggregated, certified data marts
+            2. **Enforce certified datasets/semantic reuse** -- Publish endorsed semantic models
+               that multiple reports can share
+            3. **Limit number of independent semantic models** -- Consolidate redundant models
+               into shared assets
+            4. **Publish governance guardrails** -- Document which datasets are authoritative
+               and establish review processes
+            5. **Consider Fabric pausing** -- Pause capacity during off-hours to further reduce costs
+            """)
+        else:
+            breakpoint_display = breakpoint if breakpoint else "N/A"
+            st.markdown("### When Architecture A is Fine")
+            st.markdown(f"""
+            At your current scale, the Snowflake-fed approach may be appropriate because:
+
+            - **Small number of models**: Limited duplication overhead
+            - **Low refresh frequency**: Snowflake compute costs remain manageable
+            - **Low concurrency**: Single-cluster warehouse handles the load
+            - **Established Snowflake investment**: Existing pipelines and expertise
+
+            **However**, monitor these warning signs for when to re-evaluate:
+            - Model count exceeding ~{breakpoint_display} models
+            - Increasing warehouse size or cluster count
+            - Rising operational complexity with duplicated logic
+            - Viewer count growth (Pro licensing costs scale linearly)
+            """)
+
+        # ======================================================================
+        # SECTION F: Assumptions
+        # ======================================================================
+
+        with st.expander("F. Assumptions & Formulas"):
+            st.markdown("""
+            ### Pricing Assumptions
+
+            **Snowflake Credits per Hour by Warehouse Size:**
+            | Size | Credits/Hour |
+            |------|--------------|
+            | XS | 1 |
+            | S | 2 |
+            | M | 4 |
+            | L | 8 |
+            | XL | 16 |
+            | 2XL | 32 |
+            | 3XL | 64 |
+            | 4XL | 128 |
+
+            > **Note**: Snowflake $/credit varies by contract, edition, and cloud provider.
+            > Typical range is $2-$4 per credit. Adjust the slider to match your contract.
+
+            ---
+
+            ### Cost Formulas
+
+            **Architecture A: Snowflake Compute**
+            ```
+            refresh_hours = num_models x refreshes_per_day x 30 x avg_refresh_runtime
+            interactive_hours = interactive_query_hours_per_day x 30
+            hours_running = min(730, (refresh_hours + interactive_hours) x idle_drift_factor)
+            compute_cost_A = credits_per_hour x hours_running x clusters x $/credit
+            ```
+
+            **Architecture B: Fabric Serving**
+            ```
+            effective_hours = 730 x (1 - paused_percent/100)
+            fabric_cost_B = fabric_CUs x $/CU-hour x effective_hours
+            snowflake_etl_cost = credits_per_hour x 60 x 1 x $/credit  (fixed ETL window)
+            ```
+
+            **Power BI Licensing**
+            ```
+            creators_cost = creators x (Pro or PPU price)
+            viewers_cost_A = viewers x Pro price  (always)
+            viewers_cost_B = 0 if Fabric >= F64, else viewers x Pro price
+            ```
+
+            **Operational Overhead (Proxy)**
+            ```
+            ops_cost_A = base_ops + num_models x change_rate x (1 - reuse_factor) x ops_unit_cost
+            ops_cost_B = base_ops + shared_pipelines x change_rate x ops_unit_cost x 0.5
+            ```
+
+            ---
+
+            ### Key Assumptions
+
+            - **Ops overhead is a proxy**: Actual costs depend on team size, tooling, and process maturity
+            - **Fabric F64+ enables free viewers**: This follows Power BI embedded/capacity licensing rules
+            - **Snowflake auto-suspend is imperfect**: The "idle drift factor" accounts for warehouses staying warm
+            - **Architecture B reduces Snowflake usage to ETL only**: ~2 hours/day fixed window vs. demand-driven
+            - **Egress applies to cross-cloud scenarios**: May not apply if Snowflake and Fabric are co-located
+
+            ---
+
+            ### Directional Stability
+
+            The breakpoint is **directionally stable** because:
+            1. Architecture A compute scales with `num_models x refreshes x concurrency`
+            2. Architecture B compute is largely fixed (one-time landing)
+            3. Ops overhead in A scales with model sprawl; in B it's centralized
+            4. Licensing in B can be zero for viewers with F64+
+
+            As model count increases, Architecture A's costs grow faster than B's.
+            """)
+
+        st.divider()
+        st.caption(
+            "This is a **steering model** with adjustable assumptions. "
+            "Actual costs depend on your specific contracts, usage patterns, and organizational factors. "
+            "Use this tool to inform directional decisions, not as a precise forecast."
+        )
+
     # ==========================================================================
-    # SECTION D: Phase Portrait (Optional)
+    # TAB 2: ARCHITECTURE & GOVERNANCE CASE
     # ==========================================================================
 
-    with st.expander("D. Cost Dynamics: Unit Cost Phase Portrait (Advanced)"):
+    with tab_governance:
+
+        st.header("The Case for Centralized Semantic Model Governance")
+
         st.markdown("""
-        This visualization shows how **unit cost per model** evolves as model count increases.
-
-        - **Coral arrows/line**: Architecture A -- unit cost tends to drift upward with sprawl
-        - **Blue arrows/line**: Architecture B -- unit cost decreases as fixed Fabric cost is amortized
+        > **Executive Summary**: Extending centralized data governance to include Power BI
+        > semantic models is not just a technical best practice -- it's an economic imperative.
+        > As analytics scales, ungoverned semantic model proliferation creates compounding
+        > costs, inconsistent metrics, and operational fragility that directly impact the bottom line.
         """)
 
-        fig_quiver = plot_quiver(params, sweep_df)
-        st.pyplot(fig_quiver)
-        plt.close(fig_quiver)
+        st.divider()
 
-    # ==========================================================================
-    # SECTION E: Recommendations
-    # ==========================================================================
+        # ======================================================================
+        # Architecture Comparison Diagrams
+        # ======================================================================
 
-    st.header("E. Recommendations")
+        st.subheader("Architecture Comparison")
 
-    if winner == "B":
-        st.markdown("### What to Do Next (Architecture B Wins)")
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.markdown("#### Architecture A: Decentralized Sprawl")
+            st.caption("Each team builds independent semantic models, querying source systems directly")
+
+            mermaid_a = """
+flowchart TB
+    subgraph Sources["Source Systems"]
+        SF[("Snowflake\\nData Warehouse")]
+    end
+
+    subgraph Sprawl["Ungoverned Semantic Models"]
+        M1["Sales Model v1"]
+        M2["Sales Model v2"]
+        M3["Finance Model"]
+        M4["Marketing Model"]
+        M5["Ops Model"]
+        M6["Executive Model"]
+    end
+
+    subgraph Reports["Reports & Dashboards"]
+        R1["Sales Dashboard"]
+        R2["Revenue Report"]
+        R3["Finance Dashboard"]
+        R4["Campaign Analytics"]
+        R5["Ops Metrics"]
+        R6["Exec Summary"]
+    end
+
+    SF -->|"Query"| M1
+    SF -->|"Query"| M2
+    SF -->|"Query"| M3
+    SF -->|"Query"| M4
+    SF -->|"Query"| M5
+    SF -->|"Query"| M6
+
+    M1 --> R1
+    M2 --> R2
+    M3 --> R3
+    M4 --> R4
+    M5 --> R5
+    M6 --> R6
+
+    style Sources fill:#29B5E8
+    style Sprawl fill:#FF6B6B
+    style Reports fill:#E8E8E8
+"""
+            render_mermaid(mermaid_a, height=450)
+
+            st.error("""
+            **Problems with this approach:**
+            - Duplicated compute costs (each model queries independently)
+            - Inconsistent metric definitions across models
+            - No single source of truth for KPIs
+            - High maintenance burden across teams
+            - Difficult to audit and govern
+            """)
+
+        with col2:
+            st.markdown("#### Architecture B: Centralized Governance")
+            st.caption("Curated serving layer with certified, shared semantic models")
+
+            mermaid_b = """
+flowchart TB
+    subgraph Sources["Source Systems"]
+        SF[("Snowflake\\nData Warehouse")]
+    end
+
+    subgraph Fabric["Microsoft Fabric Serving Layer"]
+        LH[("Lakehouse/Warehouse\\nCurated Data")]
+        subgraph Governed["Certified Semantic Models"]
+            SM1["Enterprise Sales Model"]
+            SM2["Enterprise Finance Model"]
+        end
+    end
+
+    subgraph Reports["Reports & Dashboards"]
+        R1["Sales Dashboard"]
+        R2["Revenue Report"]
+        R3["Finance Dashboard"]
+        R4["Campaign Analytics"]
+        R5["Ops Metrics"]
+        R6["Exec Summary"]
+    end
+
+    SF -->|"ETL Once"| LH
+    LH --> SM1
+    LH --> SM2
+
+    SM1 --> R1
+    SM1 --> R2
+    SM1 --> R4
+    SM2 --> R3
+    SM2 --> R5
+    SM2 --> R6
+
+    style Sources fill:#29B5E8
+    style Fabric fill:#0078D4
+    style Governed fill:#107C10
+    style Reports fill:#E8E8E8
+"""
+            render_mermaid(mermaid_b, height=450)
+
+            st.success("""
+            **Benefits of this approach:**
+            - Single ETL process, amortized compute costs
+            - Consistent metric definitions organization-wide
+            - Certified "single source of truth" for each domain
+            - Centralized maintenance by expert teams
+            - Clear audit trail and governance controls
+            """)
+
+        st.divider()
+
+        # ======================================================================
+        # The Business Case
+        # ======================================================================
+
+        st.subheader("The Business Case for Semantic Model Governance")
+
         st.markdown("""
-        1. **Land curated serving tables into Fabric** -- Create a Lakehouse or Warehouse
-           with pre-aggregated, certified data marts
-        2. **Enforce certified datasets/semantic reuse** -- Publish endorsed semantic models
-           that multiple reports can share
-        3. **Limit number of independent semantic models** -- Consolidate redundant models
-           into shared assets
-        4. **Publish governance guardrails** -- Document which datasets are authoritative
-           and establish review processes
-        5. **Consider Fabric pausing** -- Pause capacity during off-hours to further reduce costs
-        """)
-    else:
-        breakpoint_display = breakpoint if breakpoint else "N/A"
-        st.markdown("### When Architecture A is Fine")
-        st.markdown(f"""
-        At your current scale, the Snowflake-fed approach may be appropriate because:
+        ### Why Governance Must Extend to Semantic Models
 
-        - **Small number of models**: Limited duplication overhead
-        - **Low refresh frequency**: Snowflake compute costs remain manageable
-        - **Low concurrency**: Single-cluster warehouse handles the load
-        - **Established Snowflake investment**: Existing pipelines and expertise
+        Many organizations have invested heavily in data governance -- cataloging data assets,
+        defining data quality rules, and establishing ownership. However, **governance often stops
+        at the warehouse layer**, leaving the "last mile" of analytics ungoverned.
 
-        **However**, monitor these warning signs for when to re-evaluate:
-        - Model count exceeding ~{breakpoint_display} models
-        - Increasing warehouse size or cluster count
-        - Rising operational complexity with duplicated logic
-        - Viewer count growth (Pro licensing costs scale linearly)
+        This is a critical gap. **Semantic models are where business logic lives.** They define:
+        - How metrics are calculated (Revenue, Margin, Churn, etc.)
+        - How dimensions relate to facts
+        - What filters and hierarchies are available to end users
+        - Row-level security and access controls
+
+        When semantic models proliferate without governance, you get **metric chaos**:
+        different definitions of "Revenue" across departments, conflicting dashboard numbers
+        in executive meetings, and endless reconciliation efforts.
         """)
 
-    # ==========================================================================
-    # SECTION F: Assumptions
-    # ==========================================================================
+        # Key arguments
+        st.markdown("### Three Pillars of the Governance Argument")
 
-    with st.expander("F. Assumptions & Formulas"):
+        col1, col2, col3 = st.columns(3)
+
+        with col1:
+            st.markdown("#### 1. Economic Efficiency")
+            st.markdown("""
+            **The math is simple**: Every independent semantic model incurs:
+            - Compute costs for data refresh
+            - Developer time for maintenance
+            - Testing effort for changes
+            - Support burden for issues
+
+            With centralized models, these costs are **amortized across all consumers**.
+            Adding a new report to a certified model costs nearly nothing.
+            Adding a new independent model costs everything again.
+
+            *See the Cost Analysis tab for detailed projections.*
+            """)
+
+        with col2:
+            st.markdown("#### 2. Metric Consistency")
+            st.markdown("""
+            **Trust requires consistency.** When the CFO's dashboard shows different
+            revenue than the Sales VP's report, credibility evaporates.
+
+            Certified semantic models enforce:
+            - **Single definitions** for each metric
+            - **Documented calculations** reviewable by stakeholders
+            - **Version control** for changes
+            - **Impact analysis** before modifications
+
+            This isn't bureaucracy -- it's the foundation of data-driven decisions.
+            """)
+
+        with col3:
+            st.markdown("#### 3. Operational Resilience")
+            st.markdown("""
+            **Ungoverned sprawl creates fragility.** When one person owns a critical
+            model and leaves, knowledge walks out the door.
+
+            Centralized governance provides:
+            - **Documented ownership** and succession
+            - **Standardized patterns** others can maintain
+            - **Reduced bus factor** through shared responsibility
+            - **Clear escalation paths** for issues
+
+            Your analytics shouldn't depend on heroics.
+            """)
+
+        st.divider()
+
+        # ======================================================================
+        # Implementation Roadmap
+        # ======================================================================
+
+        st.subheader("Implementation Roadmap")
+
         st.markdown("""
-        ### Pricing Assumptions
+        Transitioning to governed semantic models doesn't require a big-bang migration.
+        A phased approach reduces risk while delivering incremental value:
+        """)
 
-        **Snowflake Credits per Hour by Warehouse Size:**
-        | Size | Credits/Hour |
-        |------|--------------|
-        | XS | 1 |
-        | S | 2 |
-        | M | 4 |
-        | L | 8 |
-        | XL | 16 |
-        | 2XL | 32 |
-        | 3XL | 64 |
-        | 4XL | 128 |
+        roadmap_data = {
+            "Phase": ["1. Foundation", "2. Pilot", "3. Expansion", "4. Optimization"],
+            "Duration": ["4-6 weeks", "6-8 weeks", "8-12 weeks", "Ongoing"],
+            "Key Activities": [
+                "Deploy Fabric capacity; establish governance policies; identify pilot domain",
+                "Build first certified semantic model; migrate 2-3 high-value reports; measure outcomes",
+                "Onboard additional domains; deprecate redundant models; train creators on reuse",
+                "Continuous improvement; cost monitoring; capacity right-sizing; advanced features"
+            ],
+            "Success Metrics": [
+                "Policies documented; Fabric operational; pilot domain selected",
+                "Pilot model certified; user adoption >80%; no metric discrepancies",
+                "50%+ models consolidated; ops cost reduction measured; creator satisfaction",
+                "Cost per report declining; time-to-insight improving; zero metric conflicts"
+            ]
+        }
 
-        > **Note**: Snowflake $/credit varies by contract, edition, and cloud provider.
-        > Typical range is $2-$4 per credit. Adjust the slider to match your contract.
+        st.table(pd.DataFrame(roadmap_data))
 
+        st.divider()
+
+        # ======================================================================
+        # Addressing Objections
+        # ======================================================================
+
+        st.subheader("Addressing Common Objections")
+
+        with st.expander("\"This will slow down our analysts.\""):
+            st.markdown("""
+            **Reality**: Governed models *accelerate* most analytics work.
+
+            - Analysts spend less time hunting for the right data
+            - Pre-built certified models eliminate redundant modeling effort
+            - Standardized patterns reduce the learning curve
+            - Self-service remains available within governed guardrails
+
+            The goal isn't to create bottlenecks -- it's to create **paved roads** that are
+            faster and safer than bushwhacking through raw data.
+            """)
+
+        with st.expander("\"We need flexibility for ad-hoc analysis.\""):
+            st.markdown("""
+            **Reality**: Governance and flexibility aren't mutually exclusive.
+
+            A well-designed governance model includes:
+            - **Sandbox environments** for experimentation
+            - **Promotion paths** from ad-hoc to certified
+            - **Composable models** that can be extended without modification
+            - **Clear criteria** for when new models are justified
+
+            The 80/20 rule applies: govern the 20% of models that drive 80% of decisions,
+            while allowing flexibility for exploratory work.
+            """)
+
+        with st.expander("\"The upfront investment is too high.\""):
+            st.markdown("""
+            **Reality**: The investment pays back quickly -- often within months.
+
+            Consider the current hidden costs:
+            - Developer time maintaining duplicate models
+            - Compute costs for redundant refreshes
+            - Meeting time reconciling conflicting numbers
+            - Opportunity cost of slow, unreliable analytics
+
+            The Cost Analysis tab provides a framework for quantifying these savings.
+            For most organizations past 10-15 semantic models, the math strongly favors consolidation.
+            """)
+
+        with st.expander("\"Our teams won't adopt centralized models.\""):
+            st.markdown("""
+            **Reality**: Adoption follows value delivery.
+
+            Keys to successful adoption:
+            - **Start with high-pain domains** where inconsistency is already causing problems
+            - **Involve consumers early** in model design
+            - **Make certified models genuinely better** (faster, more complete, better documented)
+            - **Celebrate wins** and publicize success stories
+            - **Deprecate gracefully** with migration support, not mandates
+
+            People adopt tools that make their lives easier. Focus on the user experience.
+            """)
+
+        st.divider()
+
+        # ======================================================================
+        # Call to Action
+        # ======================================================================
+
+        st.subheader("Recommended Next Steps")
+
+        st.markdown("""
+        Based on your scenario parameters, here are concrete actions to move forward:
+        """)
+
+        if winner == "B":
+            st.success("""
+            **Your current scale already justifies the Fabric serving layer approach.**
+
+            1. **Schedule a governance workshop** with Analytics leadership to align on principles
+            2. **Identify your highest-value domain** (e.g., Sales, Finance) for the pilot
+            3. **Inventory existing semantic models** to understand duplication and inconsistency
+            4. **Size your Fabric capacity** based on the Cost Analysis projections
+            5. **Define your certification criteria** for what makes a model "governed"
+
+            The economic case is clear. The question is execution.
+            """)
+        else:
+            st.info(f"""
+            **At your current scale, start building the governance foundation now.**
+
+            While Architecture A may be cheaper today, you're approaching the crossover point.
+            Use this time to:
+
+            1. **Document your current semantic model inventory** -- you'll need this baseline
+            2. **Identify metric inconsistencies** already causing pain
+            3. **Establish governance policies** before scale forces reactive cleanup
+            4. **Pilot Fabric with a non-critical workload** to build organizational capability
+            5. **Monitor your trajectory** -- revisit this analysis quarterly
+
+            Proactive governance is cheaper than reactive remediation.
+            """)
+
+        st.divider()
+
+        st.markdown("""
         ---
 
-        ### Cost Formulas
-
-        **Architecture A: Snowflake Compute**
-        ```
-        refresh_hours = num_models x refreshes_per_day x 30 x avg_refresh_runtime
-        interactive_hours = interactive_query_hours_per_day x 30
-        hours_running = min(730, (refresh_hours + interactive_hours) x idle_drift_factor)
-        compute_cost_A = credits_per_hour x hours_running x clusters x $/credit
-        ```
-
-        **Architecture B: Fabric Serving**
-        ```
-        effective_hours = 730 x (1 - paused_percent/100)
-        fabric_cost_B = fabric_CUs x $/CU-hour x effective_hours
-        snowflake_etl_cost = credits_per_hour x 60 x 1 x $/credit  (fixed ETL window)
-        ```
-
-        **Power BI Licensing**
-        ```
-        creators_cost = creators x (Pro or PPU price)
-        viewers_cost_A = viewers x Pro price  (always)
-        viewers_cost_B = 0 if Fabric >= F64, else viewers x Pro price
-        ```
-
-        **Operational Overhead (Proxy)**
-        ```
-        ops_cost_A = base_ops + num_models x change_rate x (1 - reuse_factor) x ops_unit_cost
-        ops_cost_B = base_ops + shared_pipelines x change_rate x ops_unit_cost x 0.5
-        ```
-
-        ---
-
-        ### Key Assumptions
-
-        - **Ops overhead is a proxy**: Actual costs depend on team size, tooling, and process maturity
-        - **Fabric F64+ enables free viewers**: This follows Power BI embedded/capacity licensing rules
-        - **Snowflake auto-suspend is imperfect**: The "idle drift factor" accounts for warehouses staying warm
-        - **Architecture B reduces Snowflake usage to ETL only**: ~2 hours/day fixed window vs. demand-driven
-        - **Egress applies to cross-cloud scenarios**: May not apply if Snowflake and Fabric are co-located
-
-        ---
-
-        ### Directional Stability
-
-        The breakpoint is **directionally stable** because:
-        1. Architecture A compute scales with `num_models x refreshes x concurrency`
-        2. Architecture B compute is largely fixed (one-time landing)
-        3. Ops overhead in A scales with model sprawl; in B it's centralized
-        4. Licensing in B can be zero for viewers with F64+
-
-        As model count increases, Architecture A's costs grow faster than B's.
+        *This analysis is provided as a strategic planning tool. Actual costs and outcomes
+        will vary based on your specific context, contracts, and organizational factors.
+        Use the Cost Analysis tab to model your specific scenario.*
         """)
-
-    # ==========================================================================
-    # Footer
-    # ==========================================================================
-
-    st.divider()
-    st.caption(
-        "This is a **steering model** with adjustable assumptions. "
-        "Actual costs depend on your specific contracts, usage patterns, and organizational factors. "
-        "Use this tool to inform directional decisions, not as a precise forecast."
-    )
 
 
 if __name__ == "__main__":
