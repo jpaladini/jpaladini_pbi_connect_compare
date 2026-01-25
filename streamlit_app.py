@@ -1210,348 +1210,189 @@ def main():
 
     with tab_governance:
 
-        st.header("The Case for Centralized Semantic Model Governance")
+        st.header("Architecture Comparison: Visualizing the Sprawl")
 
         st.markdown("""
-        > **Executive Summary**: Extending centralized data governance to include Power BI
-        > semantic models is not just a technical best practice -- it's an economic imperative.
-        > As analytics scales, ungoverned semantic model proliferation creates compounding
-        > costs, inconsistent metrics, and operational fragility that directly impact the bottom line.
+        Use the slider below to see how increasing semantic models affects each architecture.
+        Watch how **Architecture A** creates a tangle of connections to Snowflake, while
+        **Architecture B** maintains a clean, governed flow through Fabric.
         """)
 
+        # Slider for number of models to visualize
+        viz_models = st.slider(
+            "Number of Semantic Models",
+            min_value=2,
+            max_value=30,
+            value=6,
+            step=1,
+            key="viz_slider"
+        )
+
+        # Create side-by-side architecture diagrams
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 8))
+
+        # Colors
+        snowflake_color = "#29B5E8"
+        fabric_color = "#0078D4"
+        model_color_a = "#FF6B6B"
+        model_color_b = "#107C10"
+        report_color = "#FFB347"
+        arrow_color_a = "#CC5555"
+        arrow_color_b = "#0066AA"
+
+        # =====================================================================
+        # Architecture A: Snowflake-fed Sprawl
+        # =====================================================================
+
+        ax1.set_xlim(0, 10)
+        ax1.set_ylim(0, 10)
+        ax1.set_aspect('equal')
+        ax1.axis('off')
+        ax1.set_title(f"Architecture A: Snowflake-fed Sprawl\n({viz_models} models)",
+                      fontsize=14, fontweight='bold', color=model_color_a)
+
+        # Draw Snowflake (source) - single cylinder at top
+        snowflake_x, snowflake_y = 5, 9
+        snowflake_circle = plt.Circle((snowflake_x, snowflake_y), 0.8, color=snowflake_color, ec='black', linewidth=2)
+        ax1.add_patch(snowflake_circle)
+        ax1.text(snowflake_x, snowflake_y, "Snowflake", ha='center', va='center', fontsize=9, fontweight='bold', color='white')
+
+        # Draw semantic models in middle tier - spread across
+        model_y = 5.5
+        model_positions_a = []
+        for i in range(viz_models):
+            # Spread models across the width
+            x = 1 + (8 * i / max(viz_models - 1, 1)) if viz_models > 1 else 5
+            model_positions_a.append((x, model_y))
+
+            # Draw model box
+            rect = plt.Rectangle((x - 0.4, model_y - 0.3), 0.8, 0.6,
+                                   color=model_color_a, ec='black', linewidth=1, alpha=0.8)
+            ax1.add_patch(rect)
+
+            # Draw arrow from Snowflake to model (the sprawl!)
+            ax1.annotate('', xy=(x, model_y + 0.3), xytext=(snowflake_x, snowflake_y - 0.8),
+                        arrowprops=dict(arrowstyle='->', color=arrow_color_a, lw=1.5, alpha=0.7))
+
+        # Draw reports at bottom
+        report_y = 2
+        for i in range(viz_models):
+            x = model_positions_a[i][0]
+
+            # Draw report
+            rect = plt.Rectangle((x - 0.35, report_y - 0.25), 0.7, 0.5,
+                                   color=report_color, ec='black', linewidth=1, alpha=0.8)
+            ax1.add_patch(rect)
+
+            # Arrow from model to report
+            ax1.annotate('', xy=(x, report_y + 0.25), xytext=(x, model_y - 0.3),
+                        arrowprops=dict(arrowstyle='->', color='gray', lw=1, alpha=0.5))
+
+        # Labels
+        ax1.text(5, 0.5, f"{viz_models} independent queries to Snowflake",
+                ha='center', fontsize=11, style='italic', color=model_color_a)
+
+        # =====================================================================
+        # Architecture B: Fabric Serving Layer
+        # =====================================================================
+
+        ax2.set_xlim(0, 10)
+        ax2.set_ylim(0, 10)
+        ax2.set_aspect('equal')
+        ax2.axis('off')
+        ax2.set_title(f"Architecture B: Fabric Serving Layer\n({viz_models} models served)",
+                      fontsize=14, fontweight='bold', color=model_color_b)
+
+        # Draw Snowflake (source) - at top left
+        sf_x, sf_y = 2, 9
+        snowflake_circle2 = plt.Circle((sf_x, sf_y), 0.7, color=snowflake_color, ec='black', linewidth=2)
+        ax2.add_patch(snowflake_circle2)
+        ax2.text(sf_x, sf_y, "Snowflake", ha='center', va='center', fontsize=8, fontweight='bold', color='white')
+
+        # Draw Fabric Lakehouse - center top
+        fabric_x, fabric_y = 6, 9
+        fabric_rect = plt.Rectangle((fabric_x - 1, fabric_y - 0.5), 2, 1,
+                                      color=fabric_color, ec='black', linewidth=2)
+        ax2.add_patch(fabric_rect)
+        ax2.text(fabric_x, fabric_y, "Fabric\nLakehouse", ha='center', va='center', fontsize=8, fontweight='bold', color='white')
+
+        # Single ETL arrow from Snowflake to Fabric
+        ax2.annotate('', xy=(fabric_x - 1, fabric_y), xytext=(sf_x + 0.7, sf_y),
+                    arrowprops=dict(arrowstyle='->', color=arrow_color_b, lw=3))
+        ax2.text(4, 9.3, "ETL Once", ha='center', fontsize=9, color=arrow_color_b, fontweight='bold')
+
+        # Draw certified semantic models (just 2-3 regardless of report count)
+        num_certified = min(3, max(2, viz_models // 5 + 1))
+        certified_y = 6
+        certified_positions = []
+        for i in range(num_certified):
+            x = 3 + (4 * i / max(num_certified - 1, 1)) if num_certified > 1 else 5
+            certified_positions.append((x, certified_y))
+
+            # Draw certified model (larger, with checkmark effect)
+            rect = plt.Rectangle((x - 0.6, certified_y - 0.4), 1.2, 0.8,
+                                   color=model_color_b, ec='black', linewidth=2)
+            ax2.add_patch(rect)
+            ax2.text(x, certified_y, f"Certified\nModel {i+1}", ha='center', va='center',
+                    fontsize=7, fontweight='bold', color='white')
+
+            # Arrow from Fabric to certified model
+            ax2.annotate('', xy=(x, certified_y + 0.4), xytext=(fabric_x, fabric_y - 0.5),
+                        arrowprops=dict(arrowstyle='->', color=arrow_color_b, lw=2))
+
+        # Draw reports at bottom - distributed across certified models
+        report_y = 2.5
+        for i in range(viz_models):
+            # Assign to a certified model
+            cert_idx = i % num_certified
+            cert_x = certified_positions[cert_idx][0]
+
+            # Spread reports under their certified model
+            reports_per_cert = viz_models // num_certified + (1 if i < viz_models % num_certified else 0)
+            local_idx = i // num_certified
+            spread = min(2.5, 0.6 * reports_per_cert)
+            x = cert_x + (local_idx - reports_per_cert/2) * 0.5
+
+            # Keep within bounds
+            x = max(1, min(9, x))
+
+            # Draw report
+            rect = plt.Rectangle((x - 0.3, report_y - 0.2), 0.6, 0.4,
+                                   color=report_color, ec='black', linewidth=1, alpha=0.8)
+            ax2.add_patch(rect)
+
+            # Arrow from certified model to report
+            ax2.annotate('', xy=(x, report_y + 0.2), xytext=(cert_x, certified_y - 0.4),
+                        arrowprops=dict(arrowstyle='->', color='gray', lw=0.8, alpha=0.5))
+
+        # Labels
+        ax2.text(5, 0.5, f"1 ETL process, {num_certified} certified models serve {viz_models} reports",
+                ha='center', fontsize=11, style='italic', color=model_color_b)
+
+        plt.tight_layout()
+        st.pyplot(fig)
+        plt.close(fig)
+
+        # Key insight
         st.divider()
-
-        # ======================================================================
-        # Architecture Comparison Diagrams
-        # ======================================================================
-
-        st.subheader("Architecture Comparison")
 
         col1, col2 = st.columns(2)
-
         with col1:
-            st.markdown("#### Architecture A: Decentralized Sprawl")
-            st.caption("Each team builds independent semantic models, querying source systems directly")
-
-            mermaid_a = """
-flowchart TB
-    subgraph Sources[Source Systems]
-        SF[(Snowflake)]
-    end
-
-    subgraph Sprawl[Ungoverned Semantic Models]
-        M1[Sales Model v1]
-        M2[Sales Model v2]
-        M3[Finance Model]
-        M4[Marketing Model]
-        M5[Ops Model]
-        M6[Executive Model]
-    end
-
-    subgraph Reports[Reports]
-        R1[Sales Dashboard]
-        R2[Revenue Report]
-        R3[Finance Dashboard]
-        R4[Campaign Analytics]
-        R5[Ops Metrics]
-        R6[Exec Summary]
-    end
-
-    SF -->|Query| M1
-    SF -->|Query| M2
-    SF -->|Query| M3
-    SF -->|Query| M4
-    SF -->|Query| M5
-    SF -->|Query| M6
-
-    M1 --> R1
-    M2 --> R2
-    M3 --> R3
-    M4 --> R4
-    M5 --> R5
-    M6 --> R6
-"""
-            render_mermaid(mermaid_a, height=450)
-
-            st.error("""
-            **Problems with this approach:**
-            - Duplicated compute costs (each model queries independently)
-            - Inconsistent metric definitions across models
-            - No single source of truth for KPIs
-            - High maintenance burden across teams
-            - Difficult to audit and govern
+            st.error(f"""
+            **Architecture A at {viz_models} models:**
+            - {viz_models} independent connections to Snowflake
+            - {viz_models} separate refresh schedules
+            - {viz_models} potential metric definitions
+            - Compute scales linearly with models
             """)
-
         with col2:
-            st.markdown("#### Architecture B: Centralized Governance")
-            st.caption("Curated serving layer with certified, shared semantic models")
-
-            mermaid_b = """
-flowchart TB
-    subgraph Sources[Source Systems]
-        SF[(Snowflake)]
-    end
-
-    subgraph Fabric[Microsoft Fabric]
-        LH[(Lakehouse)]
-        subgraph Governed[Certified Models]
-            SM1[Enterprise Sales Model]
-            SM2[Enterprise Finance Model]
-        end
-    end
-
-    subgraph Reports[Reports]
-        R1[Sales Dashboard]
-        R2[Revenue Report]
-        R3[Finance Dashboard]
-        R4[Campaign Analytics]
-        R5[Ops Metrics]
-        R6[Exec Summary]
-    end
-
-    SF -->|ETL Once| LH
-    LH --> SM1
-    LH --> SM2
-
-    SM1 --> R1
-    SM1 --> R2
-    SM1 --> R4
-    SM2 --> R3
-    SM2 --> R5
-    SM2 --> R6
-"""
-            render_mermaid(mermaid_b, height=450)
-
-            st.success("""
-            **Benefits of this approach:**
-            - Single ETL process, amortized compute costs
-            - Consistent metric definitions organization-wide
-            - Certified "single source of truth" for each domain
-            - Centralized maintenance by expert teams
-            - Clear audit trail and governance controls
+            st.success(f"""
+            **Architecture B at {viz_models} models:**
+            - 1 ETL connection to Snowflake
+            - {num_certified} certified models serve all {viz_models} reports
+            - Consistent metrics across all reports
+            - Compute stays flat as reports grow
             """)
-
-        st.divider()
-
-        # ======================================================================
-        # The Business Case
-        # ======================================================================
-
-        st.subheader("The Business Case for Semantic Model Governance")
-
-        st.markdown("""
-        ### Why Governance Must Extend to Semantic Models
-
-        Many organizations have invested heavily in data governance -- cataloging data assets,
-        defining data quality rules, and establishing ownership. However, **governance often stops
-        at the warehouse layer**, leaving the "last mile" of analytics ungoverned.
-
-        This is a critical gap. **Semantic models are where business logic lives.** They define:
-        - How metrics are calculated (Revenue, Margin, Churn, etc.)
-        - How dimensions relate to facts
-        - What filters and hierarchies are available to end users
-        - Row-level security and access controls
-
-        When semantic models proliferate without governance, you get **metric chaos**:
-        different definitions of "Revenue" across departments, conflicting dashboard numbers
-        in executive meetings, and endless reconciliation efforts.
-        """)
-
-        # Key arguments
-        st.markdown("### Three Pillars of the Governance Argument")
-
-        col1, col2, col3 = st.columns(3)
-
-        with col1:
-            st.markdown("#### 1. Economic Efficiency")
-            st.markdown("""
-            **The math is simple**: Every independent semantic model incurs:
-            - Compute costs for data refresh
-            - Developer time for maintenance
-            - Testing effort for changes
-            - Support burden for issues
-
-            With centralized models, these costs are **amortized across all consumers**.
-            Adding a new report to a certified model costs nearly nothing.
-            Adding a new independent model costs everything again.
-
-            *See the Cost Analysis tab for detailed projections.*
-            """)
-
-        with col2:
-            st.markdown("#### 2. Metric Consistency")
-            st.markdown("""
-            **Trust requires consistency.** When the CFO's dashboard shows different
-            revenue than the Sales VP's report, credibility evaporates.
-
-            Certified semantic models enforce:
-            - **Single definitions** for each metric
-            - **Documented calculations** reviewable by stakeholders
-            - **Version control** for changes
-            - **Impact analysis** before modifications
-
-            This isn't bureaucracy -- it's the foundation of data-driven decisions.
-            """)
-
-        with col3:
-            st.markdown("#### 3. Operational Resilience")
-            st.markdown("""
-            **Ungoverned sprawl creates fragility.** When one person owns a critical
-            model and leaves, knowledge walks out the door.
-
-            Centralized governance provides:
-            - **Documented ownership** and succession
-            - **Standardized patterns** others can maintain
-            - **Reduced bus factor** through shared responsibility
-            - **Clear escalation paths** for issues
-
-            Your analytics shouldn't depend on heroics.
-            """)
-
-        st.divider()
-
-        # ======================================================================
-        # Implementation Roadmap
-        # ======================================================================
-
-        st.subheader("Implementation Roadmap")
-
-        st.markdown("""
-        Transitioning to governed semantic models doesn't require a big-bang migration.
-        A phased approach reduces risk while delivering incremental value:
-        """)
-
-        roadmap_data = {
-            "Phase": ["1. Foundation", "2. Pilot", "3. Expansion", "4. Optimization"],
-            "Duration": ["4-6 weeks", "6-8 weeks", "8-12 weeks", "Ongoing"],
-            "Key Activities": [
-                "Deploy Fabric capacity; establish governance policies; identify pilot domain",
-                "Build first certified semantic model; migrate 2-3 high-value reports; measure outcomes",
-                "Onboard additional domains; deprecate redundant models; train creators on reuse",
-                "Continuous improvement; cost monitoring; capacity right-sizing; advanced features"
-            ],
-            "Success Metrics": [
-                "Policies documented; Fabric operational; pilot domain selected",
-                "Pilot model certified; user adoption >80%; no metric discrepancies",
-                "50%+ models consolidated; ops cost reduction measured; creator satisfaction",
-                "Cost per report declining; time-to-insight improving; zero metric conflicts"
-            ]
-        }
-
-        st.table(pd.DataFrame(roadmap_data))
-
-        st.divider()
-
-        # ======================================================================
-        # Addressing Objections
-        # ======================================================================
-
-        st.subheader("Addressing Common Objections")
-
-        with st.expander("\"This will slow down our analysts.\""):
-            st.markdown("""
-            **Reality**: Governed models *accelerate* most analytics work.
-
-            - Analysts spend less time hunting for the right data
-            - Pre-built certified models eliminate redundant modeling effort
-            - Standardized patterns reduce the learning curve
-            - Self-service remains available within governed guardrails
-
-            The goal isn't to create bottlenecks -- it's to create **paved roads** that are
-            faster and safer than bushwhacking through raw data.
-            """)
-
-        with st.expander("\"We need flexibility for ad-hoc analysis.\""):
-            st.markdown("""
-            **Reality**: Governance and flexibility aren't mutually exclusive.
-
-            A well-designed governance model includes:
-            - **Sandbox environments** for experimentation
-            - **Promotion paths** from ad-hoc to certified
-            - **Composable models** that can be extended without modification
-            - **Clear criteria** for when new models are justified
-
-            The 80/20 rule applies: govern the 20% of models that drive 80% of decisions,
-            while allowing flexibility for exploratory work.
-            """)
-
-        with st.expander("\"The upfront investment is too high.\""):
-            st.markdown("""
-            **Reality**: The investment pays back quickly -- often within months.
-
-            Consider the current hidden costs:
-            - Developer time maintaining duplicate models
-            - Compute costs for redundant refreshes
-            - Meeting time reconciling conflicting numbers
-            - Opportunity cost of slow, unreliable analytics
-
-            The Cost Analysis tab provides a framework for quantifying these savings.
-            For most organizations past 10-15 semantic models, the math strongly favors consolidation.
-            """)
-
-        with st.expander("\"Our teams won't adopt centralized models.\""):
-            st.markdown("""
-            **Reality**: Adoption follows value delivery.
-
-            Keys to successful adoption:
-            - **Start with high-pain domains** where inconsistency is already causing problems
-            - **Involve consumers early** in model design
-            - **Make certified models genuinely better** (faster, more complete, better documented)
-            - **Celebrate wins** and publicize success stories
-            - **Deprecate gracefully** with migration support, not mandates
-
-            People adopt tools that make their lives easier. Focus on the user experience.
-            """)
-
-        st.divider()
-
-        # ======================================================================
-        # Call to Action
-        # ======================================================================
-
-        st.subheader("Recommended Next Steps")
-
-        st.markdown("""
-        Based on your scenario parameters, here are concrete actions to move forward:
-        """)
-
-        if winner == "B":
-            st.success("""
-            **Your current scale already justifies the Fabric serving layer approach.**
-
-            1. **Schedule a governance workshop** with Analytics leadership to align on principles
-            2. **Identify your highest-value domain** (e.g., Sales, Finance) for the pilot
-            3. **Inventory existing semantic models** to understand duplication and inconsistency
-            4. **Size your Fabric capacity** based on the Cost Analysis projections
-            5. **Define your certification criteria** for what makes a model "governed"
-
-            The economic case is clear. The question is execution.
-            """)
-        else:
-            st.info(f"""
-            **At your current scale, start building the governance foundation now.**
-
-            While Architecture A may be cheaper today, you're approaching the crossover point.
-            Use this time to:
-
-            1. **Document your current semantic model inventory** -- you'll need this baseline
-            2. **Identify metric inconsistencies** already causing pain
-            3. **Establish governance policies** before scale forces reactive cleanup
-            4. **Pilot Fabric with a non-critical workload** to build organizational capability
-            5. **Monitor your trajectory** -- revisit this analysis quarterly
-
-            Proactive governance is cheaper than reactive remediation.
-            """)
-
-        st.divider()
-
-        st.markdown("""
-        ---
-
-        *This analysis is provided as a strategic planning tool. Actual costs and outcomes
-        will vary based on your specific context, contracts, and organizational factors.
-        Use the Cost Analysis tab to model your specific scenario.*
-        """)
 
 
 if __name__ == "__main__":
