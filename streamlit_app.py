@@ -974,14 +974,14 @@ def main():
         st.subheader("Cost Details")
 
         breakdown_data = {
-            "Component": ["Compute", "Licensing", "Egress", "Ops Overhead", "Fabric Serving", "**TOTAL**"],
+            "Component": ["Compute", "Licensing", "Egress", "Ops Overhead", "Fabric Serving", "TOTAL"],
             "Arch A ($)": [
                 f"{cost_a.compute_cost:,.0f}",
                 f"{cost_a.licensing_cost:,.0f}",
                 f"{cost_a.egress_cost:,.0f}",
                 f"{cost_a.ops_overhead_cost:,.0f}",
                 "---",
-                f"**{cost_a.total_cost:,.0f}**",
+                f"{cost_a.total_cost:,.0f}",
             ],
             "Arch B ($)": [
                 f"{cost_b.compute_cost:,.0f}",
@@ -989,11 +989,11 @@ def main():
                 f"{cost_b.egress_cost:,.0f}",
                 f"{cost_b.ops_overhead_cost:,.0f}",
                 f"{cost_b.fabric_serving_cost:,.0f}",
-                f"**{cost_b.total_cost:,.0f}**",
+                f"{cost_b.total_cost:,.0f}",
             ],
         }
 
-        st.markdown(pd.DataFrame(breakdown_data).to_markdown(index=False))
+        st.table(pd.DataFrame(breakdown_data))
 
     # ==========================================================================
     # SECTION C: Breakpoint Chart
