@@ -1537,9 +1537,8 @@ def main():
         ax_deploy.text(10.75, 5.3, "(Fabric Capacity)", ha='center', va='center', fontsize=8, color='white')
         ax_deploy.text(10.75, 4.8, "Deployment Pipeline", ha='center', va='center', fontsize=8, color='white', style='italic')
 
-        # PR Gate
-        ax_deploy.add_patch(plt.FancyBboxPatch((7.5, 4.8), 1.5, 1.4, boxstyle="round,pad=0.05",
-                                                color=pr_color, ec='black', lw=2))
+        # PR Gate (using Rectangle instead of FancyBboxPatch for compatibility)
+        ax_deploy.add_patch(plt.Rectangle((7.5, 4.8), 1.5, 1.4, color=pr_color, ec='black', lw=2, alpha=0.9))
         ax_deploy.text(8.25, 5.7, "PR Gate", ha='center', va='center', fontsize=9, fontweight='bold', color='white')
         ax_deploy.text(8.25, 5.2, "Senior\nApproval", ha='center', va='center', fontsize=8, color='white')
 
