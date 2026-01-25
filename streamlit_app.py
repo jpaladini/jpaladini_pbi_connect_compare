@@ -652,7 +652,11 @@ def main():
     # MAIN TABS
     # ==========================================================================
 
-    tab_cost, tab_governance = st.tabs(["Cost Analysis", "Architecture & Governance Case"])
+    tab_cost, tab_arch, tab_strategy = st.tabs([
+        "Cost Analysis",
+        "Architecture Visualization",
+        "Governance Strategy"
+    ])
 
     # ==========================================================================
     # SIDEBAR: Configuration
@@ -1208,7 +1212,7 @@ def main():
     # TAB 2: ARCHITECTURE & GOVERNANCE CASE
     # ==========================================================================
 
-    with tab_governance:
+    with tab_arch:
 
         st.header("Architecture Comparison: Visualizing the Sprawl")
 
@@ -1392,6 +1396,430 @@ def main():
             - {num_certified} certified models serve all {viz_models} reports
             - Consistent metrics across all reports
             - Compute stays flat as reports grow
+            """)
+
+    # ==========================================================================
+    # TAB 3: GOVERNANCE STRATEGY
+    # ==========================================================================
+
+    with tab_strategy:
+
+        st.header("Power BI Governance Strategy")
+
+        st.markdown("""
+        This tab outlines our recommended governance strategy for Power BI semantic models,
+        integrating with our existing data platform (Databricks + Snowflake) and leveraging
+        Microsoft Fabric's deployment pipelines for controlled, auditable releases.
+        """)
+
+        st.divider()
+
+        # ======================================================================
+        # End-to-End Data Flow
+        # ======================================================================
+
+        st.subheader("End-to-End Data Platform Architecture")
+
+        st.markdown("""
+        Our data work happens on purpose-built platforms. Power BI is the **presentation layer**,
+        not the transformation layer.
+        """)
+
+        # Draw the end-to-end architecture
+        fig_arch, ax_arch = plt.subplots(figsize=(14, 6))
+        ax_arch.set_xlim(0, 14)
+        ax_arch.set_ylim(0, 6)
+        ax_arch.axis('off')
+
+        # Colors
+        databricks_color = "#FF3621"
+        snowflake_color = "#29B5E8"
+        fabric_color = "#0078D4"
+        pbi_color = "#F2C811"
+
+        # Layer 1: Databricks (transforms)
+        rect = plt.Rectangle((0.5, 4), 3, 1.5, color=databricks_color, ec='black', lw=2, alpha=0.9)
+        ax_arch.add_patch(rect)
+        ax_arch.text(2, 4.75, "Databricks", ha='center', va='center', fontsize=11, fontweight='bold', color='white')
+        ax_arch.text(2, 4.3, "dbt transforms", ha='center', va='center', fontsize=9, color='white')
+        ax_arch.text(2, 3.6, "Bronze → Silver → Gold", ha='center', va='center', fontsize=8, style='italic')
+
+        # Layer 2: Snowflake (exposure)
+        rect = plt.Rectangle((4.5, 4), 3, 1.5, color=snowflake_color, ec='black', lw=2, alpha=0.9)
+        ax_arch.add_patch(rect)
+        ax_arch.text(6, 4.75, "Snowflake", ha='center', va='center', fontsize=11, fontweight='bold', color='white')
+        ax_arch.text(6, 4.3, "Gold Schema", ha='center', va='center', fontsize=9, color='white')
+        ax_arch.text(6, 3.6, "Data Exposure Layer", ha='center', va='center', fontsize=8, style='italic')
+
+        # Layer 3: Fabric (serving)
+        rect = plt.Rectangle((8.5, 4), 3, 1.5, color=fabric_color, ec='black', lw=2, alpha=0.9)
+        ax_arch.add_patch(rect)
+        ax_arch.text(10, 4.75, "Fabric", ha='center', va='center', fontsize=11, fontweight='bold', color='white')
+        ax_arch.text(10, 4.3, "Lakehouse/Warehouse", ha='center', va='center', fontsize=9, color='white')
+        ax_arch.text(10, 3.6, "BI Serving Layer", ha='center', va='center', fontsize=8, style='italic')
+
+        # Layer 4: Power BI (presentation)
+        rect = plt.Rectangle((12, 4), 1.5, 1.5, color=pbi_color, ec='black', lw=2, alpha=0.9)
+        ax_arch.add_patch(rect)
+        ax_arch.text(12.75, 4.75, "Power BI", ha='center', va='center', fontsize=10, fontweight='bold')
+        ax_arch.text(12.75, 4.3, "Reports", ha='center', va='center', fontsize=8)
+
+        # Arrows
+        ax_arch.annotate('', xy=(4.4, 4.75), xytext=(3.6, 4.75),
+                        arrowprops=dict(arrowstyle='->', color='black', lw=2))
+        ax_arch.annotate('', xy=(8.4, 4.75), xytext=(7.6, 4.75),
+                        arrowprops=dict(arrowstyle='->', color='black', lw=2))
+        ax_arch.annotate('', xy=(11.9, 4.75), xytext=(11.6, 4.75),
+                        arrowprops=dict(arrowstyle='->', color='black', lw=2))
+
+        # Annotations
+        ax_arch.text(4, 5.7, "ETL/ELT", ha='center', fontsize=9, fontweight='bold')
+        ax_arch.text(8, 5.7, "Single ETL", ha='center', fontsize=9, fontweight='bold', color=fabric_color)
+        ax_arch.text(11.75, 5.7, "Query", ha='center', fontsize=9, fontweight='bold')
+
+        # Bottom annotations - what happens where
+        ax_arch.text(2, 2.8, "Complex transforms\nBusiness logic\nData quality", ha='center', fontsize=8, color=databricks_color)
+        ax_arch.text(6, 2.8, "Governed exposure\nAccess control\nAudit logging", ha='center', fontsize=8, color=snowflake_color)
+        ax_arch.text(10, 2.8, "Certified models\nDAX measures\nBI optimization", ha='center', fontsize=8, color=fabric_color)
+        ax_arch.text(12.75, 2.8, "Visualization\nSelf-service\nDistribution", ha='center', fontsize=8, color='#B8860B')
+
+        # Key insight box
+        rect = plt.Rectangle((0.5, 0.5), 13, 1.5, color='#F0F0F0', ec='#666666', lw=1)
+        ax_arch.add_patch(rect)
+        ax_arch.text(7, 1.5, "Key Principle: Data transformations stay in Databricks/dbt.", ha='center', fontsize=10, fontweight='bold')
+        ax_arch.text(7, 0.9, "Power BI semantic models handle presentation logic (DAX measures, relationships) — not ETL.", ha='center', fontsize=9)
+
+        plt.tight_layout()
+        st.pyplot(fig_arch)
+        plt.close(fig_arch)
+
+        st.divider()
+
+        # ======================================================================
+        # Deployment Pipeline
+        # ======================================================================
+
+        st.subheader("Fabric Deployment Pipeline: Dev → Prod with PR Gates")
+
+        st.markdown("""
+        We use Fabric's native deployment pipelines with Git integration to ensure all changes
+        are reviewed, tested, and traceable.
+        """)
+
+        # Draw the deployment pipeline
+        fig_deploy, ax_deploy = plt.subplots(figsize=(14, 7))
+        ax_deploy.set_xlim(0, 14)
+        ax_deploy.set_ylim(0, 7)
+        ax_deploy.axis('off')
+
+        # Colors
+        private_color = "#9E9E9E"
+        dev_color = "#FF9800"
+        prod_color = "#4CAF50"
+        pr_color = "#9C27B0"
+
+        # Private Workspace (analyst sandbox)
+        rect = plt.Rectangle((0.5, 4.5), 2.5, 2),
+        ax_deploy.add_patch(plt.Rectangle((0.5, 4.5), 2.5, 2, color=private_color, ec='black', lw=2, alpha=0.8))
+        ax_deploy.text(1.75, 5.8, "Private Workspace", ha='center', va='center', fontsize=10, fontweight='bold', color='white')
+        ax_deploy.text(1.75, 5.3, "(No Capacity)", ha='center', va='center', fontsize=8, color='white')
+        ax_deploy.text(1.75, 4.8, "Analyst Sandbox", ha='center', va='center', fontsize=8, color='white', style='italic')
+
+        # Dev Workspace
+        ax_deploy.add_patch(plt.Rectangle((4.5, 4.5), 2.5, 2, color=dev_color, ec='black', lw=2, alpha=0.9))
+        ax_deploy.text(5.75, 5.8, "DEV Workspace", ha='center', va='center', fontsize=10, fontweight='bold', color='white')
+        ax_deploy.text(5.75, 5.3, "(Fabric Capacity)", ha='center', va='center', fontsize=8, color='white')
+        ax_deploy.text(5.75, 4.8, "Git Connected", ha='center', va='center', fontsize=8, color='white', style='italic')
+
+        # Prod Workspace
+        ax_deploy.add_patch(plt.Rectangle((9.5, 4.5), 2.5, 2, color=prod_color, ec='black', lw=2, alpha=0.9))
+        ax_deploy.text(10.75, 5.8, "PROD Workspace", ha='center', va='center', fontsize=10, fontweight='bold', color='white')
+        ax_deploy.text(10.75, 5.3, "(Fabric Capacity)", ha='center', va='center', fontsize=8, color='white')
+        ax_deploy.text(10.75, 4.8, "Deployment Pipeline", ha='center', va='center', fontsize=8, color='white', style='italic')
+
+        # PR Gate
+        ax_deploy.add_patch(plt.FancyBboxPatch((7.5, 4.8), 1.5, 1.4, boxstyle="round,pad=0.05",
+                                                color=pr_color, ec='black', lw=2))
+        ax_deploy.text(8.25, 5.7, "PR Gate", ha='center', va='center', fontsize=9, fontweight='bold', color='white')
+        ax_deploy.text(8.25, 5.2, "Senior\nApproval", ha='center', va='center', fontsize=8, color='white')
+
+        # Arrows
+        ax_deploy.annotate('', xy=(4.4, 5.5), xytext=(3.1, 5.5),
+                          arrowprops=dict(arrowstyle='->', color='black', lw=2))
+        ax_deploy.text(3.75, 5.9, "Promote", ha='center', fontsize=8)
+
+        ax_deploy.annotate('', xy=(7.4, 5.5), xytext=(7.1, 5.5),
+                          arrowprops=dict(arrowstyle='->', color='black', lw=2))
+
+        ax_deploy.annotate('', xy=(9.4, 5.5), xytext=(9.1, 5.5),
+                          arrowprops=dict(arrowstyle='->', color='black', lw=2))
+        ax_deploy.text(9.25, 5.9, "Deploy", ha='center', fontsize=8)
+
+        # Git integration indicator
+        ax_deploy.add_patch(plt.Rectangle((4.8, 3.8), 2, 0.5, color='#24292E', ec='black', lw=1))
+        ax_deploy.text(5.8, 4.05, "Git Repo", ha='center', va='center', fontsize=8, color='white')
+        ax_deploy.annotate('', xy=(5.75, 4.4), xytext=(5.75, 4.35),
+                          arrowprops=dict(arrowstyle='<->', color='#24292E', lw=1.5))
+
+        # Workflow description boxes
+        ax_deploy.add_patch(plt.Rectangle((0.3, 1.5), 3, 2), )
+        rect1 = plt.Rectangle((0.3, 1.5), 3, 2, color='#FAFAFA', ec=private_color, lw=2)
+        ax_deploy.add_patch(rect1)
+        ax_deploy.text(1.8, 3.2, "1. Experiment", ha='center', fontsize=9, fontweight='bold', color=private_color)
+        ax_deploy.text(1.8, 2.7, "Analysts build models in", ha='center', fontsize=8)
+        ax_deploy.text(1.8, 2.4, "private workspaces.", ha='center', fontsize=8)
+        ax_deploy.text(1.8, 2.0, "Pro license to share.", ha='center', fontsize=8, style='italic')
+        ax_deploy.text(1.8, 1.7, "No capacity cost.", ha='center', fontsize=8, style='italic')
+
+        rect2 = plt.Rectangle((3.8, 1.5), 3.5, 2, color='#FFF8E1', ec=dev_color, lw=2)
+        ax_deploy.add_patch(rect2)
+        ax_deploy.text(5.55, 3.2, "2. Develop", ha='center', fontsize=9, fontweight='bold', color=dev_color)
+        ax_deploy.text(5.55, 2.7, "Proven products move to", ha='center', fontsize=8)
+        ax_deploy.text(5.55, 2.4, "DEV. Git-tracked changes.", ha='center', fontsize=8)
+        ax_deploy.text(5.55, 2.0, "Integrate into certified", ha='center', fontsize=8, style='italic')
+        ax_deploy.text(5.55, 1.7, "models or create new.", ha='center', fontsize=8, style='italic')
+
+        rect3 = plt.Rectangle((7.8, 1.5), 2.5, 2, color='#F3E5F5', ec=pr_color, lw=2)
+        ax_deploy.add_patch(rect3)
+        ax_deploy.text(9.05, 3.2, "3. Review", ha='center', fontsize=9, fontweight='bold', color=pr_color)
+        ax_deploy.text(9.05, 2.7, "PR required.", ha='center', fontsize=8)
+        ax_deploy.text(9.05, 2.4, "Senior approves.", ha='center', fontsize=8)
+        ax_deploy.text(9.05, 2.0, "Quality gate.", ha='center', fontsize=8, style='italic')
+
+        rect4 = plt.Rectangle((10.8, 1.5), 2.8, 2, color='#E8F5E9', ec=prod_color, lw=2)
+        ax_deploy.add_patch(rect4)
+        ax_deploy.text(12.2, 3.2, "4. Release", ha='center', fontsize=9, fontweight='bold', color=prod_color)
+        ax_deploy.text(12.2, 2.7, "Deploy to PROD via", ha='center', fontsize=8)
+        ax_deploy.text(12.2, 2.4, "Fabric pipeline.", ha='center', fontsize=8)
+        ax_deploy.text(12.2, 2.0, "Free viewers with F64+.", ha='center', fontsize=8, style='italic')
+        ax_deploy.text(12.2, 1.7, "Full audit trail.", ha='center', fontsize=8, style='italic')
+
+        # Title
+        ax_deploy.text(7, 6.8, "Fabric Workspace Deployment Model", ha='center', fontsize=12, fontweight='bold')
+
+        plt.tight_layout()
+        st.pyplot(fig_deploy)
+        plt.close(fig_deploy)
+
+        # Workflow explanation
+        st.markdown("""
+        #### How It Works
+
+        | Stage | Workspace | Who | What Happens |
+        |-------|-----------|-----|--------------|
+        | **Experiment** | Private (no capacity) | Any analyst | Build models, test DAX, create reports. Share requires Pro license. |
+        | **Develop** | DEV (Fabric capacity) | Data team | Proven products promoted here. Git-tracked. Integrate into certified models. |
+        | **Review** | PR Gate | Senior/Lead | Code review required. Approve or request changes. Quality checkpoint. |
+        | **Release** | PROD (Fabric capacity) | Automated | Deployment pipeline pushes to production. Free viewers with F64+. |
+        """)
+
+        st.info("""
+        **When to go back to Databricks/dbt:**
+        - Complex business logic that should be materialized
+        - Calculations needed for audit/compliance
+        - Performance optimization (pre-aggregate in Gold)
+        - Logic reused across multiple semantic models
+
+        *DAX is for presentation logic. dbt is for data logic.*
+        """)
+
+        st.divider()
+
+        # ======================================================================
+        # Certified vs Self-Service Models
+        # ======================================================================
+
+        st.subheader("Certified Models vs. Self-Service: The 80/20 Rule")
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.markdown("#### Certified Models (80% of use cases)")
+            st.success("""
+            **Pre-built semantic models on Fabric Lakehouse:**
+
+            - Standardized DAX measures for common KPIs
+            - Documented metric definitions
+            - Row-level security configured
+            - Refresh schedules managed centrally
+            - Endorsed and discoverable in the org
+
+            **Who uses them:**
+            - Business analysts creating reports
+            - Executives viewing dashboards
+            - Cross-functional teams needing consistent metrics
+
+            **Governance:** Full CI/CD, PR-gated, senior approval
+            """)
+
+        with col2:
+            st.markdown("#### Self-Service Models (20% of use cases)")
+            st.warning("""
+            **Analyst-created models in private workspaces:**
+
+            - Ad-hoc analysis and exploration
+            - Department-specific metrics
+            - Prototyping new reports
+            - One-off requests
+
+            **Who creates them:**
+            - Power users with modeling skills
+            - Analysts with specific domain needs
+            - Teams testing new data sources
+
+            **Governance:** Requires Pro license to share.
+            Successful products graduate to certified.
+            """)
+
+        st.markdown("""
+        ---
+
+        **The graduation path:**
+
+        ```
+        Private Workspace (experiment) → Business Approval → DEV (integrate) → PR Review → PROD (certified)
+        ```
+
+        This keeps governance tight on the models that matter (certified), while allowing
+        innovation at the edges (self-service). Sprawl is contained because self-service
+        models can't reach broad audiences without going through the governance gate.
+        """)
+
+        st.divider()
+
+        # ======================================================================
+        # DevSecOps with Purview and APIs
+        # ======================================================================
+
+        st.subheader("DevSecOps: Automated Controls with Purview & REST APIs")
+
+        st.markdown("""
+        Centralizing on Fabric unlocks powerful automated governance capabilities that are
+        impossible with sprawled semantic models.
+        """)
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.markdown("#### Microsoft Purview Integration")
+            st.markdown("""
+            **Sensitivity Labels:**
+            - Auto-classify semantic models based on data content
+            - Labels inherit from source (Snowflake → Fabric → Power BI)
+            - Downstream inheritance to reports and dashboards
+
+            **Data Loss Prevention (DLP):**
+            - Policies scan semantic models for sensitive data
+            - Block or alert on policy violations
+            - Audit trail of all access and changes
+
+            **Unified Governance:**
+            - Single pane of glass in Purview Hub
+            - Lineage from Databricks through to Power BI
+            - Compliance reporting for auditors
+
+            [Learn more: Purview DLP for Fabric](https://learn.microsoft.com/en-us/purview/dlp-powerbi-get-started)
+            """)
+
+        with col2:
+            st.markdown("#### Power BI REST & Scanner APIs")
+            st.markdown("""
+            **Metadata Scanning:**
+            - Inventory all semantic models, tables, columns, measures
+            - Extract DAX expressions for review
+            - Identify unused or duplicate models
+
+            **Automated Governance:**
+            - Service principal authentication (no user dependency)
+            - Scheduled scans for compliance checks
+            - Integration with Purview, Collibra, Alation
+
+            **Programmatic Control:**
+            - Refresh management via API
+            - Workspace provisioning automation
+            - Custom alerting on governance violations
+
+            [Learn more: Scanner APIs](https://learn.microsoft.com/en-us/power-bi/enterprise/service-admin-metadata-scanning)
+            """)
+
+        st.markdown("""
+        ---
+
+        #### Why This Matters for Sprawl Prevention
+
+        | With Sprawl (Many Models) | With Centralization (Few Certified Models) |
+        |---------------------------|---------------------------------------------|
+        | Must scan/govern hundreds of models | Scan/govern a handful of certified models |
+        | Sensitivity labels applied inconsistently | Labels inherit automatically through lineage |
+        | DLP policies hard to enforce | DLP applies at the serving layer |
+        | API automation complex and brittle | Clean automation against known models |
+        | Audit trail fragmented | Complete lineage from source to report |
+        """)
+
+        st.divider()
+
+        # ======================================================================
+        # Tie back to cost
+        # ======================================================================
+
+        st.subheader("Connecting to the Cost Case")
+
+        st.markdown("""
+        This governance strategy directly supports the economic argument from the **Cost Analysis** tab:
+        """)
+
+        col1, col2, col3 = st.columns(3)
+
+        with col1:
+            st.metric(label="Snowflake Egress", value="Minimized", delta="1 ETL vs N queries")
+            st.caption("Single ETL from Snowflake to Fabric, not per-model queries")
+
+        with col2:
+            st.metric(label="Viewer Licensing", value="$0/user", delta="F64+ capacity")
+            st.caption("Free viewers with Fabric capacity vs Pro licenses for all")
+
+        with col3:
+            st.metric(label="Ops Overhead", value="Reduced", delta="Centralized maintenance")
+            st.caption("Fewer models = less maintenance, testing, and support")
+
+        st.success("""
+        **The governance strategy enables the cost savings:**
+
+        1. **Single ETL path** → Lower Snowflake compute costs
+        2. **Certified models on Fabric** → Free viewer access
+        3. **PR-gated deployments** → Quality control reduces rework
+        4. **Automated compliance** → Less manual governance effort
+        5. **Contained sprawl** → Predictable, manageable environment
+        """)
+
+        st.divider()
+
+        # ======================================================================
+        # Resources
+        # ======================================================================
+
+        with st.expander("Resources & References"):
+            st.markdown("""
+            #### Microsoft Documentation
+
+            **Fabric Deployment & CI/CD:**
+            - [Deployment Pipelines Overview](https://learn.microsoft.com/en-us/fabric/cicd/deployment-pipelines/intro-to-deployment-pipelines)
+            - [Git Integration with Deployment Pipelines](https://learn.microsoft.com/en-us/fabric/real-time-intelligence/git-deployment-pipelines)
+            - [CI/CD Workflow Options](https://learn.microsoft.com/en-us/fabric/cicd/manage-deployment)
+            - [Best Practices for Lifecycle Management](https://learn.microsoft.com/en-us/fabric/cicd/best-practices-cicd)
+
+            **Governance & Security:**
+            - [Sensitivity Labels in Power BI](https://learn.microsoft.com/en-us/fabric/enterprise/powerbi/service-security-sensitivity-label-overview)
+            - [DLP for Fabric and Power BI](https://learn.microsoft.com/en-us/purview/dlp-powerbi-get-started)
+            - [Metadata Scanning Overview](https://learn.microsoft.com/en-us/fabric/governance/metadata-scanning-overview)
+            - [Power BI REST APIs](https://learn.microsoft.com/en-us/rest/api/power-bi/)
+
+            **Semantic Model Best Practices:**
+            - [Semantic Models in Power BI Service](https://learn.microsoft.com/en-us/power-bi/connect-data/service-datasets-understand)
+
+            #### Community Resources
+            - [Fabric Lifecycle Management Blog](https://blog.fabric.microsoft.com/en-us/blog/microsoft-fabric-lifecycle-management-getting-started-with-git-integration-and-deployment-pipelines/)
+            - [Scanner API Enhancements](https://powerbi.microsoft.com/en-my/blog/announcing-scanner-api-admin-rest-apis-enhancements-to-include-dataset-tables-columns-measures-dax-expressions-and-mashup-queries/)
             """)
 
 
