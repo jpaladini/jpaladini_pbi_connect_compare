@@ -9,40 +9,18 @@ Key insight: As model count grows, Architecture A (Snowflake-fed sprawl) incurs
 duplicated compute, spiky concurrency, and higher operational overhead. Architecture B
 (Fabric serving layer) amortizes ETL cost and improves reuse.
 
+Compatible with Snowflake Streamlit-in-Snowflake (SiS) environments.
+
 Run with: streamlit run streamlit_app.py
 
 Author: Data Platform Engineering
 """
 
 import streamlit as st
-import streamlit.components.v1 as components
-import numpy as np
+import altair as alt
 import pandas as pd
-import matplotlib.pyplot as plt
 from typing import Dict, Any, Tuple, Optional
 from dataclasses import dataclass
-
-
-# =============================================================================
-# MERMAID DIAGRAM RENDERING
-# =============================================================================
-
-def render_mermaid(mermaid_code: str, height: int = 400) -> None:
-    """Render a Mermaid diagram using HTML components."""
-    html_code = f"""
-    <html>
-    <head>
-        <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
-        <script>mermaid.initialize({{startOnLoad:true, theme:'neutral'}});</script>
-    </head>
-    <body>
-        <div class="mermaid">
-{mermaid_code}
-        </div>
-    </body>
-    </html>
-    """
-    components.html(html_code, height=height)
 
 
 # =============================================================================
@@ -150,6 +128,10 @@ class CostBreakdown:
             + self.fabric_serving_cost
         )
 
+
+# =============================================================================
+# COST COMPUTATION FUNCTIONS
+# =============================================================================
 
 def compute_snowflake_hours(params: ScenarioParams) -> float:
     """
@@ -267,7 +249,6 @@ def compute_architecture_b_costs(params: ScenarioParams) -> CostBreakdown:
 
     # --- Compute Cost (minimal Snowflake for source extraction only) ---
     # In Architecture B, Snowflake usage is much lower - just for landing data
-    # Assume ~10% of the compute compared to Architecture A
     credits_per_hour = SNOWFLAKE_WAREHOUSE_CREDITS.get(params.avg_warehouse_size, 4)
     # Fixed ETL window, not scaling with num_models
     etl_hours_per_month = min(100, 2 * 30)  # ~2 hours/day for ETL
@@ -384,206 +365,283 @@ def find_breakpoint(sweep_df: pd.DataFrame) -> Optional[int]:
     return int(crossover.iloc[0]["num_models"])
 
 
-def plot_breakpoint(sweep_df: pd.DataFrame, current_models: int) -> plt.Figure:
-    """
-    Create the breakpoint chart showing cost curves for both architectures.
-    """
-    fig, ax = plt.subplots(figsize=(10, 6))
+# =============================================================================
+# ALTAIR CHART FUNCTIONS
+# =============================================================================
 
-    ax.plot(
-        sweep_df["num_models"],
-        sweep_df["cost_a"],
-        label="Architecture A: Snowflake-fed sprawl",
-        linewidth=2,
-        marker="o",
-        markevery=10,
-    )
-    ax.plot(
-        sweep_df["num_models"],
-        sweep_df["cost_b"],
-        label="Architecture B: Fabric serving layer",
-        linewidth=2,
-        marker="s",
-        markevery=10,
-    )
+def chart_breakpoint(sweep_df: pd.DataFrame, current_models: int, breakpoint_val: Optional[int]) -> alt.LayerChart:
+    """Create breakpoint line chart using Altair."""
 
-    # Find and annotate breakpoint
-    breakpoint = find_breakpoint(sweep_df)
-    if breakpoint is not None:
-        bp_cost = sweep_df[sweep_df["num_models"] == breakpoint]["cost_a"].values[0]
-        ax.axvline(x=breakpoint, color="gray", linestyle="--", alpha=0.7)
-        ax.annotate(
-            f"Breakeven: ~{breakpoint} models",
-            xy=(breakpoint, bp_cost),
-            xytext=(breakpoint + 5, bp_cost * 1.1),
-            fontsize=10,
-            arrowprops=dict(arrowstyle="->", color="gray"),
+    # Prepare long-form data for Altair
+    chart_data = sweep_df[["num_models", "cost_a", "cost_b"]].melt(
+        id_vars="num_models",
+        var_name="Architecture",
+        value_name="Monthly Cost (USD)",
+    )
+    chart_data["Architecture"] = chart_data["Architecture"].map({
+        "cost_a": "A: Snowflake-fed sprawl",
+        "cost_b": "B: Fabric serving layer",
+    })
+
+    # Main cost curves
+    lines = (
+        alt.Chart(chart_data)
+        .mark_line(strokeWidth=2.5)
+        .encode(
+            x=alt.X("num_models:Q", title="Number of Semantic Models"),
+            y=alt.Y(
+                "Monthly Cost (USD):Q",
+                title="Monthly Cost (USD)",
+                axis=alt.Axis(format="$,.0f"),
+            ),
+            color=alt.Color(
+                "Architecture:N",
+                scale=alt.Scale(
+                    domain=["A: Snowflake-fed sprawl", "B: Fabric serving layer"],
+                    range=["#E74C3C", "#2E86C1"],
+                ),
+                legend=alt.Legend(title=None, orient="top"),
+            ),
+            tooltip=[
+                alt.Tooltip("Architecture:N"),
+                alt.Tooltip("num_models:Q", title="Models"),
+                alt.Tooltip("Monthly Cost (USD):Q", format="$,.0f"),
+            ],
         )
-
-    # Mark current position
-    ax.axvline(x=current_models, color="red", linestyle=":", alpha=0.7, linewidth=2)
-    ax.annotate(
-        f"Current: {current_models} models",
-        xy=(current_models, ax.get_ylim()[1] * 0.95),
-        fontsize=9,
-        color="red",
-        ha="center",
     )
 
-    ax.set_xlabel("Number of Semantic Models", fontsize=11)
-    ax.set_ylabel("Monthly Cost (USD)", fontsize=11)
-    ax.set_title("Cost Breakpoint Analysis: Snowflake vs Fabric", fontsize=13)
-    ax.legend(loc="upper left", fontsize=10)
-    ax.grid(True, alpha=0.3)
+    layers = [lines]
 
-    # Format y-axis as currency
-    ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f"${x:,.0f}"))
+    # Current position vertical rule
+    current_df = pd.DataFrame({"x": [current_models], "label": [f"Current: {current_models}"]})
+    current_rule = (
+        alt.Chart(current_df)
+        .mark_rule(color="red", strokeDash=[4, 4], strokeWidth=2)
+        .encode(x="x:Q")
+    )
+    current_text = (
+        alt.Chart(current_df)
+        .mark_text(align="center", baseline="bottom", dy=-5, fontSize=11, fontWeight="bold", color="red")
+        .encode(x="x:Q", y=alt.value(15), text="label:N")
+    )
+    layers.extend([current_rule, current_text])
 
-    plt.tight_layout()
-    return fig
+    # Breakpoint vertical rule
+    if breakpoint_val is not None:
+        bp_df = pd.DataFrame({"x": [breakpoint_val], "label": [f"Breakeven: {breakpoint_val}"]})
+        bp_rule = (
+            alt.Chart(bp_df)
+            .mark_rule(color="gray", strokeDash=[6, 3])
+            .encode(x="x:Q")
+        )
+        bp_text = (
+            alt.Chart(bp_df)
+            .mark_text(align="left", baseline="bottom", dx=5, dy=-5, fontSize=11, color="gray")
+            .encode(x="x:Q", y=alt.value(30), text="label:N")
+        )
+        layers.extend([bp_rule, bp_text])
 
+    chart = (
+        alt.layer(*layers)
+        .properties(width="container", height=400, title="Cost Breakpoint Analysis: Snowflake vs Fabric")
+    )
 
-def plot_cost_breakdown(cost_a: CostBreakdown, cost_b: CostBreakdown) -> plt.Figure:
-    """
-    Create a stacked bar chart comparing cost components.
-    """
-    fig, ax = plt.subplots(figsize=(10, 6))
-
-    categories = ["Compute", "Licensing", "Egress", "Ops Overhead", "Fabric Serving"]
-
-    # Architecture A values
-    values_a = [
-        cost_a.compute_cost,
-        cost_a.licensing_cost,
-        cost_a.egress_cost,
-        cost_a.ops_overhead_cost,
-        0,  # No Fabric serving cost
-    ]
-
-    # Architecture B values
-    values_b = [
-        cost_b.compute_cost,
-        cost_b.licensing_cost,
-        cost_b.egress_cost,
-        cost_b.ops_overhead_cost,
-        cost_b.fabric_serving_cost,
-    ]
-
-    width = 0.6
-
-    # Create stacked bars
-    bottom_a = 0.0
-    bottom_b = 0.0
-
-    colors = plt.cm.tab10.colors
-
-    for i, (cat, val_a, val_b) in enumerate(zip(categories, values_a, values_b)):
-        if val_a > 0 or val_b > 0:  # Only show non-zero categories
-            ax.bar(0, val_a, width, bottom=bottom_a, label=cat, color=colors[i])
-            ax.bar(1, val_b, width, bottom=bottom_b, color=colors[i])
-            bottom_a += val_a
-            bottom_b += val_b
-
-    # Add total labels on top
-    ax.text(0, cost_a.total_cost + 100, f"${cost_a.total_cost:,.0f}", ha="center", fontsize=11, fontweight="bold")
-    ax.text(1, cost_b.total_cost + 100, f"${cost_b.total_cost:,.0f}", ha="center", fontsize=11, fontweight="bold")
-
-    ax.set_xticks([0, 1])
-    ax.set_xticklabels(["A: Snowflake-fed\nSprawl", "B: Fabric\nServing Layer"], fontsize=11)
-    ax.set_ylabel("Monthly Cost (USD)", fontsize=11)
-    ax.set_title("Cost Breakdown by Component", fontsize=13)
-    ax.legend(loc="upper right", fontsize=9)
-    ax.grid(True, alpha=0.3, axis="y")
-
-    # Format y-axis as currency
-    ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f"${x:,.0f}"))
-
-    plt.tight_layout()
-    return fig
+    return chart
 
 
-def plot_quiver(params: ScenarioParams, sweep_df: pd.DataFrame) -> plt.Figure:
-    """
-    Create a simplified 2D phase portrait showing cost dynamics.
+def chart_cost_breakdown(cost_a: CostBreakdown, cost_b: CostBreakdown) -> alt.Chart:
+    """Create stacked bar chart comparing cost components using Altair."""
 
-    X-axis: Model sprawl (normalized num_models)
-    Y-axis: Unit cost per model
+    data = pd.DataFrame({
+        "Component": ["Compute", "Licensing", "Egress", "Ops Overhead", "Fabric Serving"] * 2,
+        "Architecture": ["A: Snowflake-fed"] * 5 + ["B: Fabric serving"] * 5,
+        "Cost": [
+            cost_a.compute_cost, cost_a.licensing_cost, cost_a.egress_cost,
+            cost_a.ops_overhead_cost, 0,
+            cost_b.compute_cost, cost_b.licensing_cost, cost_b.egress_cost,
+            cost_b.ops_overhead_cost, cost_b.fabric_serving_cost,
+        ],
+    })
 
-    Arrows show direction of cost pressure as models increase.
-    """
-    fig, ax = plt.subplots(figsize=(10, 6))
+    # Filter out zero-cost components for cleaner display
+    non_zero = data.groupby("Component")["Cost"].sum()
+    active_components = non_zero[non_zero > 0].index.tolist()
+    data = data[data["Component"].isin(active_components)]
 
-    # Create a working copy to avoid modifying the original
+    chart = (
+        alt.Chart(data)
+        .mark_bar()
+        .encode(
+            x=alt.X("Architecture:N", title="", axis=alt.Axis(labelFontSize=12)),
+            y=alt.Y("Cost:Q", title="Monthly Cost (USD)", axis=alt.Axis(format="$,.0f"), stack=True),
+            color=alt.Color(
+                "Component:N",
+                scale=alt.Scale(scheme="tableau10"),
+                legend=alt.Legend(title="Cost Component", orient="right"),
+            ),
+            order=alt.Order("Component:N"),
+            tooltip=[
+                alt.Tooltip("Architecture:N"),
+                alt.Tooltip("Component:N"),
+                alt.Tooltip("Cost:Q", format="$,.0f"),
+            ],
+        )
+        .properties(width="container", height=400, title="Cost Breakdown by Component")
+    )
+
+    return chart
+
+
+def chart_unit_cost(sweep_df: pd.DataFrame, current_models: int) -> alt.LayerChart:
+    """Create unit cost dynamics chart using Altair."""
+
     df = sweep_df.copy()
+    df["unit_a"] = df["cost_a"] / df["num_models"].clip(lower=1)
+    df["unit_b"] = df["cost_b"] / df["num_models"].clip(lower=1)
 
-    # Create grid
-    max_models = df["num_models"].max()
-
-    # Calculate unit costs (avoid division by zero)
-    df["unit_cost_a"] = df["cost_a"] / df["num_models"].clip(lower=1)
-    df["unit_cost_b"] = df["cost_b"] / df["num_models"].clip(lower=1)
-
-    # Normalize model count to 0-1
-    df["normalized_models"] = df["num_models"] / max_models
-
-    # Sample points for quiver plot
-    sample_indices = np.linspace(0, len(df) - 2, 10, dtype=int)
-
-    # Architecture A vectors (tend to drift up-right with low reuse)
-    for idx in sample_indices:
-        x = df.iloc[idx]["normalized_models"]
-        y = df.iloc[idx]["unit_cost_a"]
-
-        # Vector direction: rightward (more models) and upward (higher unit cost)
-        dx = 0.05
-        dy = (df.iloc[idx + 1]["unit_cost_a"] - y) * 2  # Amplify for visibility
-
-        ax.quiver(x, y, dx, dy, angles="xy", scale_units="xy", scale=1,
-                  color="coral", alpha=0.7, width=0.008)
-
-    # Architecture B vectors (tend toward stable region)
-    for idx in sample_indices:
-        x = df.iloc[idx]["normalized_models"]
-        y = df.iloc[idx]["unit_cost_b"]
-
-        dx = 0.05
-        dy = (df.iloc[idx + 1]["unit_cost_b"] - y) * 2
-
-        ax.quiver(x, y, dx, dy, angles="xy", scale_units="xy", scale=1,
-                  color="steelblue", alpha=0.7, width=0.008)
-
-    # Plot the actual curves
-    ax.plot(
-        df["normalized_models"],
-        df["unit_cost_a"],
-        label="A: Snowflake-fed (unit cost)",
-        linewidth=2,
-        color="coral",
+    chart_data = df[["num_models", "unit_a", "unit_b"]].melt(
+        id_vars="num_models",
+        var_name="Architecture",
+        value_name="Unit Cost ($/model/month)",
     )
-    ax.plot(
-        df["normalized_models"],
-        df["unit_cost_b"],
-        label="B: Fabric serving (unit cost)",
-        linewidth=2,
-        color="steelblue",
+    chart_data["Architecture"] = chart_data["Architecture"].map({
+        "unit_a": "A: Snowflake-fed (unit cost)",
+        "unit_b": "B: Fabric serving (unit cost)",
+    })
+
+    lines = (
+        alt.Chart(chart_data)
+        .mark_line(strokeWidth=2.5)
+        .encode(
+            x=alt.X("num_models:Q", title="Number of Semantic Models"),
+            y=alt.Y(
+                "Unit Cost ($/model/month):Q",
+                title="Unit Cost per Model ($/model/month)",
+                axis=alt.Axis(format="$,.0f"),
+            ),
+            color=alt.Color(
+                "Architecture:N",
+                scale=alt.Scale(
+                    domain=["A: Snowflake-fed (unit cost)", "B: Fabric serving (unit cost)"],
+                    range=["#E74C3C", "#2E86C1"],
+                ),
+                legend=alt.Legend(title=None, orient="top"),
+            ),
+            tooltip=[
+                alt.Tooltip("Architecture:N"),
+                alt.Tooltip("num_models:Q", title="Models"),
+                alt.Tooltip("Unit Cost ($/model/month):Q", format="$,.0f"),
+            ],
+        )
     )
 
-    # Mark current position
-    current_norm = params.num_models / max_models
-    ax.axvline(x=current_norm, color="gray", linestyle=":", alpha=0.7)
+    # Current position
+    current_df = pd.DataFrame({"x": [current_models]})
+    current_rule = (
+        alt.Chart(current_df)
+        .mark_rule(color="gray", strokeDash=[4, 4])
+        .encode(x="x:Q")
+    )
 
-    ax.set_xlabel("Model Sprawl (normalized)", fontsize=11)
-    ax.set_ylabel("Unit Cost per Model (USD/model/month)", fontsize=11)
-    ax.set_title("Cost Dynamics: Unit Cost vs Scale", fontsize=13)
-    ax.legend(loc="upper right", fontsize=10)
-    ax.grid(True, alpha=0.3)
+    chart = (
+        alt.layer(lines, current_rule)
+        .properties(width="container", height=350, title="Cost Dynamics: Unit Cost vs Scale")
+    )
 
-    # Format y-axis as currency
-    ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f"${x:,.0f}"))
+    return chart
 
-    plt.tight_layout()
-    return fig
 
+# =============================================================================
+# ARCHITECTURE VISUALIZATION (HTML-based, SiS-compatible)
+# =============================================================================
+
+def render_architecture_html(n_models: int) -> Tuple[str, str]:
+    """Generate HTML for side-by-side architecture comparison diagrams."""
+
+    # --- Architecture A: Snowflake-fed sprawl ---
+    model_boxes_a = "".join(
+        f'<div style="background:#FF6B6B;color:#fff;padding:3px 7px;margin:2px;'
+        f'border-radius:4px;display:inline-block;font-size:10px;font-weight:bold;">'
+        f'M{i+1}</div>'
+        for i in range(n_models)
+    )
+
+    report_boxes_a = "".join(
+        f'<div style="background:#FFB347;color:#333;padding:2px 6px;margin:1px;'
+        f'border-radius:3px;display:inline-block;font-size:9px;">'
+        f'R{i+1}</div>'
+        for i in range(n_models)
+    )
+
+    arrow_count = min(n_models, 20)
+    arrows_a = '<span style="color:#CC5555;font-size:14px;letter-spacing:2px;">' + " &darr; " * arrow_count + "</span>"
+
+    html_a = f"""
+    <div style="text-align:center;padding:20px;border:2px solid #FF6B6B;border-radius:12px;background:rgba(255,107,107,0.04);min-height:320px;">
+        <div style="font-size:14px;font-weight:bold;color:#CC5555;margin-bottom:12px;">
+            Architecture A: Snowflake-fed Sprawl
+        </div>
+        <div style="background:#29B5E8;color:#fff;padding:12px 28px;border-radius:30px;display:inline-block;font-weight:bold;font-size:15px;margin-bottom:6px;">
+            Snowflake
+        </div>
+        <div style="margin:8px 0;">{arrows_a}</div>
+        <div style="margin:10px 4px;">{model_boxes_a}</div>
+        <div style="color:#999;margin:6px 0;font-size:16px;">&darr; &darr; &darr;</div>
+        <div style="margin:10px 4px;">{report_boxes_a}</div>
+        <div style="color:#CC5555;font-size:12px;margin-top:14px;font-style:italic;">
+            {n_models} independent queries to Snowflake
+        </div>
+    </div>
+    """
+
+    # --- Architecture B: Fabric serving layer ---
+    n_certified = min(3, max(2, n_models // 5 + 1))
+
+    cert_boxes = "".join(
+        f'<div style="background:#107C10;color:#fff;padding:6px 14px;margin:3px;'
+        f'border-radius:6px;display:inline-block;font-size:11px;font-weight:bold;">'
+        f'Certified {i+1}</div>'
+        for i in range(n_certified)
+    )
+
+    report_boxes_b = "".join(
+        f'<div style="background:#FFB347;color:#333;padding:2px 6px;margin:1px;'
+        f'border-radius:3px;display:inline-block;font-size:9px;">'
+        f'R{i+1}</div>'
+        for i in range(n_models)
+    )
+
+    html_b = f"""
+    <div style="text-align:center;padding:20px;border:2px solid #107C10;border-radius:12px;background:rgba(16,124,16,0.04);min-height:320px;">
+        <div style="font-size:14px;font-weight:bold;color:#107C10;margin-bottom:12px;">
+            Architecture B: Fabric Serving Layer
+        </div>
+        <div style="display:inline-flex;align-items:center;gap:10px;margin-bottom:6px;">
+            <div style="background:#29B5E8;color:#fff;padding:8px 16px;border-radius:20px;font-weight:bold;font-size:12px;">
+                Snowflake
+            </div>
+            <span style="font-size:22px;color:#0066AA;font-weight:bold;">&rarr;</span>
+            <div style="background:#0078D4;color:#fff;padding:10px 20px;border-radius:8px;font-weight:bold;font-size:13px;">
+                Fabric Lakehouse
+            </div>
+        </div>
+        <div style="color:#0066AA;font-size:10px;margin:4px 0 6px 0;font-weight:bold;">Single ETL</div>
+        <div style="color:#107C10;font-size:16px;margin:4px 0;">&darr;</div>
+        <div style="margin:10px 4px;">{cert_boxes}</div>
+        <div style="color:#999;margin:6px 0;font-size:16px;">&darr; &darr; &darr;</div>
+        <div style="margin:10px 4px;">{report_boxes_b}</div>
+        <div style="color:#107C10;font-size:12px;margin-top:14px;font-style:italic;">
+            1 ETL, {n_certified} certified models serve {n_models} reports
+        </div>
+    </div>
+    """
+
+    return html_a, html_b
+
+
+# =============================================================================
+# SCENARIO PRESETS
+# =============================================================================
 
 def get_scenario_preset(preset_name: str) -> Dict[str, Any]:
     """Return parameter values for predefined scenarios."""
@@ -627,6 +685,10 @@ def get_scenario_preset(preset_name: str) -> Dict[str, Any]:
     }
     return presets.get(preset_name, presets["Today"])
 
+
+# =============================================================================
+# MAIN APPLICATION
+# =============================================================================
 
 def main():
     """Main Streamlit application."""
@@ -931,11 +993,7 @@ def main():
     sweep_df = sweep_models(params, max_models=100)
     breakpoint = find_breakpoint(sweep_df)
 
-    # ==========================================================================
-    # TAB 1: COST ANALYSIS
-    # ==========================================================================
-
-    # Compute winner for both tabs
+    # Compute winner
     cost_diff = cost_a.total_cost - cost_b.total_cost
     winner = "B" if cost_diff > 0 else "A"
 
@@ -945,13 +1003,12 @@ def main():
 
     with tab_cost:
 
-        # ======================================================================
+        # ==================================================================
         # SECTION A: Executive Summary
-        # ======================================================================
+        # ==================================================================
 
         st.header("A. Executive Summary")
 
-        # Determine color scheme
         if winner == "B":
             recommendation = "Architecture B (Fabric) is recommended"
         else:
@@ -1001,18 +1058,16 @@ def main():
                 f"at {num_models} models. Consider re-evaluating as you scale."
             )
 
-        # ======================================================================
+        # ==================================================================
         # SECTION B: Cost Comparison Breakdown
-        # ======================================================================
+        # ==================================================================
 
         st.header("B. Cost Comparison Breakdown")
 
         col1, col2 = st.columns([2, 1])
 
         with col1:
-            fig_breakdown = plot_cost_breakdown(cost_a, cost_b)
-            st.pyplot(fig_breakdown)
-            plt.close(fig_breakdown)
+            st.altair_chart(chart_cost_breakdown(cost_a, cost_b), use_container_width=True)
 
         with col2:
             st.subheader("Cost Details")
@@ -1039,15 +1094,16 @@ def main():
 
             st.table(pd.DataFrame(breakdown_data))
 
-        # ======================================================================
+        # ==================================================================
         # SECTION C: Breakpoint Chart
-        # ======================================================================
+        # ==================================================================
 
         st.header("C. Breakpoint Analysis")
 
-        fig_breakpoint = plot_breakpoint(sweep_df, num_models)
-        st.pyplot(fig_breakpoint)
-        plt.close(fig_breakpoint)
+        st.altair_chart(
+            chart_breakpoint(sweep_df, num_models, breakpoint),
+            use_container_width=True,
+        )
 
         if breakpoint:
             st.markdown(
@@ -1070,25 +1126,26 @@ def main():
                     "Architecture A remains cheaper, but this may change with different parameters."
                 )
 
-        # ======================================================================
-        # SECTION D: Phase Portrait (Optional)
-        # ======================================================================
+        # ==================================================================
+        # SECTION D: Unit Cost Dynamics (Advanced)
+        # ==================================================================
 
-        with st.expander("D. Cost Dynamics: Unit Cost Phase Portrait (Advanced)"):
+        with st.expander("D. Cost Dynamics: Unit Cost per Model (Advanced)"):
             st.markdown("""
             This visualization shows how **unit cost per model** evolves as model count increases.
 
-            - **Coral arrows/line**: Architecture A -- unit cost tends to drift upward with sprawl
-            - **Blue arrows/line**: Architecture B -- unit cost decreases as fixed Fabric cost is amortized
+            - **Red line**: Architecture A -- unit cost tends to stay high or rise with sprawl
+            - **Blue line**: Architecture B -- unit cost decreases as fixed Fabric cost is amortized
             """)
 
-            fig_quiver = plot_quiver(params, sweep_df)
-            st.pyplot(fig_quiver)
-            plt.close(fig_quiver)
+            st.altair_chart(
+                chart_unit_cost(sweep_df, num_models),
+                use_container_width=True,
+            )
 
-        # ======================================================================
+        # ==================================================================
         # SECTION E: Recommendations
-        # ======================================================================
+        # ==================================================================
 
         st.header("E. Recommendations")
 
@@ -1123,9 +1180,9 @@ def main():
             - Viewer count growth (Pro licensing costs scale linearly)
             """)
 
-        # ======================================================================
+        # ==================================================================
         # SECTION F: Assumptions
-        # ======================================================================
+        # ==================================================================
 
         with st.expander("F. Assumptions & Formulas"):
             st.markdown("""
@@ -1209,7 +1266,7 @@ def main():
         )
 
     # ==========================================================================
-    # TAB 2: ARCHITECTURE & GOVERNANCE CASE
+    # TAB 2: ARCHITECTURE VISUALIZATION
     # ==========================================================================
 
     with tab_arch:
@@ -1232,153 +1289,21 @@ def main():
             key="viz_slider"
         )
 
-        # Create side-by-side architecture diagrams
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 8))
+        # Render side-by-side architecture diagrams using HTML
+        html_a, html_b = render_architecture_html(viz_models)
 
-        # Colors
-        snowflake_color = "#29B5E8"
-        fabric_color = "#0078D4"
-        model_color_a = "#FF6B6B"
-        model_color_b = "#107C10"
-        report_color = "#FFB347"
-        arrow_color_a = "#CC5555"
-        arrow_color_b = "#0066AA"
+        col_a, col_b = st.columns(2)
 
-        # =====================================================================
-        # Architecture A: Snowflake-fed Sprawl
-        # =====================================================================
+        with col_a:
+            st.markdown(html_a, unsafe_allow_html=True)
 
-        ax1.set_xlim(0, 10)
-        ax1.set_ylim(0, 10)
-        ax1.set_aspect('equal')
-        ax1.axis('off')
-        ax1.set_title(f"Architecture A: Snowflake-fed Sprawl\n({viz_models} models)",
-                      fontsize=14, fontweight='bold', color=model_color_a)
-
-        # Draw Snowflake (source) - single cylinder at top
-        snowflake_x, snowflake_y = 5, 9
-        snowflake_circle = plt.Circle((snowflake_x, snowflake_y), 0.8, color=snowflake_color, ec='black', linewidth=2)
-        ax1.add_patch(snowflake_circle)
-        ax1.text(snowflake_x, snowflake_y, "Snowflake", ha='center', va='center', fontsize=9, fontweight='bold', color='white')
-
-        # Draw semantic models in middle tier - spread across
-        model_y = 5.5
-        model_positions_a = []
-        for i in range(viz_models):
-            # Spread models across the width
-            x = 1 + (8 * i / max(viz_models - 1, 1)) if viz_models > 1 else 5
-            model_positions_a.append((x, model_y))
-
-            # Draw model box
-            rect = plt.Rectangle((x - 0.4, model_y - 0.3), 0.8, 0.6,
-                                   color=model_color_a, ec='black', linewidth=1, alpha=0.8)
-            ax1.add_patch(rect)
-
-            # Draw arrow from Snowflake to model (the sprawl!)
-            ax1.annotate('', xy=(x, model_y + 0.3), xytext=(snowflake_x, snowflake_y - 0.8),
-                        arrowprops=dict(arrowstyle='->', color=arrow_color_a, lw=1.5, alpha=0.7))
-
-        # Draw reports at bottom
-        report_y = 2
-        for i in range(viz_models):
-            x = model_positions_a[i][0]
-
-            # Draw report
-            rect = plt.Rectangle((x - 0.35, report_y - 0.25), 0.7, 0.5,
-                                   color=report_color, ec='black', linewidth=1, alpha=0.8)
-            ax1.add_patch(rect)
-
-            # Arrow from model to report
-            ax1.annotate('', xy=(x, report_y + 0.25), xytext=(x, model_y - 0.3),
-                        arrowprops=dict(arrowstyle='->', color='gray', lw=1, alpha=0.5))
-
-        # Labels
-        ax1.text(5, 0.5, f"{viz_models} independent queries to Snowflake",
-                ha='center', fontsize=11, style='italic', color=model_color_a)
-
-        # =====================================================================
-        # Architecture B: Fabric Serving Layer
-        # =====================================================================
-
-        ax2.set_xlim(0, 10)
-        ax2.set_ylim(0, 10)
-        ax2.set_aspect('equal')
-        ax2.axis('off')
-        ax2.set_title(f"Architecture B: Fabric Serving Layer\n({viz_models} models served)",
-                      fontsize=14, fontweight='bold', color=model_color_b)
-
-        # Draw Snowflake (source) - at top left
-        sf_x, sf_y = 2, 9
-        snowflake_circle2 = plt.Circle((sf_x, sf_y), 0.7, color=snowflake_color, ec='black', linewidth=2)
-        ax2.add_patch(snowflake_circle2)
-        ax2.text(sf_x, sf_y, "Snowflake", ha='center', va='center', fontsize=8, fontweight='bold', color='white')
-
-        # Draw Fabric Lakehouse - center top
-        fabric_x, fabric_y = 6, 9
-        fabric_rect = plt.Rectangle((fabric_x - 1, fabric_y - 0.5), 2, 1,
-                                      color=fabric_color, ec='black', linewidth=2)
-        ax2.add_patch(fabric_rect)
-        ax2.text(fabric_x, fabric_y, "Fabric\nLakehouse", ha='center', va='center', fontsize=8, fontweight='bold', color='white')
-
-        # Single ETL arrow from Snowflake to Fabric
-        ax2.annotate('', xy=(fabric_x - 1, fabric_y), xytext=(sf_x + 0.7, sf_y),
-                    arrowprops=dict(arrowstyle='->', color=arrow_color_b, lw=3))
-        ax2.text(4, 9.3, "ETL Once", ha='center', fontsize=9, color=arrow_color_b, fontweight='bold')
-
-        # Draw certified semantic models (just 2-3 regardless of report count)
-        num_certified = min(3, max(2, viz_models // 5 + 1))
-        certified_y = 6
-        certified_positions = []
-        for i in range(num_certified):
-            x = 3 + (4 * i / max(num_certified - 1, 1)) if num_certified > 1 else 5
-            certified_positions.append((x, certified_y))
-
-            # Draw certified model (larger, with checkmark effect)
-            rect = plt.Rectangle((x - 0.6, certified_y - 0.4), 1.2, 0.8,
-                                   color=model_color_b, ec='black', linewidth=2)
-            ax2.add_patch(rect)
-            ax2.text(x, certified_y, f"Certified\nModel {i+1}", ha='center', va='center',
-                    fontsize=7, fontweight='bold', color='white')
-
-            # Arrow from Fabric to certified model
-            ax2.annotate('', xy=(x, certified_y + 0.4), xytext=(fabric_x, fabric_y - 0.5),
-                        arrowprops=dict(arrowstyle='->', color=arrow_color_b, lw=2))
-
-        # Draw reports at bottom - distributed across certified models
-        report_y = 2.5
-        for i in range(viz_models):
-            # Assign to a certified model
-            cert_idx = i % num_certified
-            cert_x = certified_positions[cert_idx][0]
-
-            # Spread reports under their certified model
-            reports_per_cert = viz_models // num_certified + (1 if i < viz_models % num_certified else 0)
-            local_idx = i // num_certified
-            spread = min(2.5, 0.6 * reports_per_cert)
-            x = cert_x + (local_idx - reports_per_cert/2) * 0.5
-
-            # Keep within bounds
-            x = max(1, min(9, x))
-
-            # Draw report
-            rect = plt.Rectangle((x - 0.3, report_y - 0.2), 0.6, 0.4,
-                                   color=report_color, ec='black', linewidth=1, alpha=0.8)
-            ax2.add_patch(rect)
-
-            # Arrow from certified model to report
-            ax2.annotate('', xy=(x, report_y + 0.2), xytext=(cert_x, certified_y - 0.4),
-                        arrowprops=dict(arrowstyle='->', color='gray', lw=0.8, alpha=0.5))
-
-        # Labels
-        ax2.text(5, 0.5, f"1 ETL process, {num_certified} certified models serve {viz_models} reports",
-                ha='center', fontsize=11, style='italic', color=model_color_b)
-
-        plt.tight_layout()
-        st.pyplot(fig)
-        plt.close(fig)
+        with col_b:
+            st.markdown(html_b, unsafe_allow_html=True)
 
         # Key insight
         st.divider()
+
+        n_certified = min(3, max(2, viz_models // 5 + 1))
 
         col1, col2 = st.columns(2)
         with col1:
@@ -1393,7 +1318,7 @@ def main():
             st.success(f"""
             **Architecture B at {viz_models} models:**
             - 1 ETL connection to Snowflake
-            - {num_certified} certified models serve all {viz_models} reports
+            - {n_certified} certified models serve all {viz_models} reports
             - Consistent metrics across all reports
             - Compute stays flat as reports grow
             """)
@@ -1414,9 +1339,9 @@ def main():
 
         st.divider()
 
-        # ======================================================================
+        # ==================================================================
         # End-to-End Data Flow
-        # ======================================================================
+        # ==================================================================
 
         st.subheader("End-to-End Data Platform Architecture")
 
@@ -1425,180 +1350,94 @@ def main():
         not the transformation layer.
         """)
 
-        # Draw the end-to-end architecture
-        fig_arch, ax_arch = plt.subplots(figsize=(14, 6))
-        ax_arch.set_xlim(0, 14)
-        ax_arch.set_ylim(0, 6)
-        ax_arch.axis('off')
+        # Architecture flow using styled HTML
+        arch_html = """
+        <div style="display:flex;align-items:stretch;gap:8px;flex-wrap:wrap;justify-content:center;margin:20px 0;">
+            <div style="background:#FF3621;color:#fff;padding:16px 20px;border-radius:10px;text-align:center;flex:1;min-width:140px;">
+                <div style="font-weight:bold;font-size:14px;">Databricks</div>
+                <div style="font-size:11px;margin-top:4px;">dbt transforms</div>
+                <div style="font-size:10px;font-style:italic;margin-top:2px;">Bronze &rarr; Silver &rarr; Gold</div>
+            </div>
+            <div style="display:flex;align-items:center;font-size:24px;color:#666;font-weight:bold;">&rarr;</div>
+            <div style="background:#29B5E8;color:#fff;padding:16px 20px;border-radius:10px;text-align:center;flex:1;min-width:140px;">
+                <div style="font-weight:bold;font-size:14px;">Snowflake</div>
+                <div style="font-size:11px;margin-top:4px;">Gold Schema</div>
+                <div style="font-size:10px;font-style:italic;margin-top:2px;">Data Exposure Layer</div>
+            </div>
+            <div style="display:flex;align-items:center;font-size:24px;color:#666;font-weight:bold;">&rarr;</div>
+            <div style="background:#0078D4;color:#fff;padding:16px 20px;border-radius:10px;text-align:center;flex:1;min-width:140px;">
+                <div style="font-weight:bold;font-size:14px;">Fabric</div>
+                <div style="font-size:11px;margin-top:4px;">Lakehouse / Warehouse</div>
+                <div style="font-size:10px;font-style:italic;margin-top:2px;">BI Serving Layer</div>
+            </div>
+            <div style="display:flex;align-items:center;font-size:24px;color:#666;font-weight:bold;">&rarr;</div>
+            <div style="background:#F2C811;color:#333;padding:16px 20px;border-radius:10px;text-align:center;flex:1;min-width:140px;">
+                <div style="font-weight:bold;font-size:14px;">Power BI</div>
+                <div style="font-size:11px;margin-top:4px;">Reports & Dashboards</div>
+                <div style="font-size:10px;font-style:italic;margin-top:2px;">Presentation Layer</div>
+            </div>
+        </div>
+        """
+        st.markdown(arch_html, unsafe_allow_html=True)
 
-        # Colors
-        databricks_color = "#FF3621"
-        snowflake_color = "#29B5E8"
-        fabric_color = "#0078D4"
-        pbi_color = "#F2C811"
+        # What happens where
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.caption("Complex transforms | Business logic | Data quality")
+        with col2:
+            st.caption("Governed exposure | Access control | Audit logging")
+        with col3:
+            st.caption("Certified models | DAX measures | BI optimization")
+        with col4:
+            st.caption("Visualization | Self-service | Distribution")
 
-        # Layer 1: Databricks (transforms)
-        rect = plt.Rectangle((0.5, 4), 3, 1.5, color=databricks_color, ec='black', lw=2, alpha=0.9)
-        ax_arch.add_patch(rect)
-        ax_arch.text(2, 4.75, "Databricks", ha='center', va='center', fontsize=11, fontweight='bold', color='white')
-        ax_arch.text(2, 4.3, "dbt transforms", ha='center', va='center', fontsize=9, color='white')
-        ax_arch.text(2, 3.6, "Bronze → Silver → Gold", ha='center', va='center', fontsize=8, style='italic')
-
-        # Layer 2: Snowflake (exposure)
-        rect = plt.Rectangle((4.5, 4), 3, 1.5, color=snowflake_color, ec='black', lw=2, alpha=0.9)
-        ax_arch.add_patch(rect)
-        ax_arch.text(6, 4.75, "Snowflake", ha='center', va='center', fontsize=11, fontweight='bold', color='white')
-        ax_arch.text(6, 4.3, "Gold Schema", ha='center', va='center', fontsize=9, color='white')
-        ax_arch.text(6, 3.6, "Data Exposure Layer", ha='center', va='center', fontsize=8, style='italic')
-
-        # Layer 3: Fabric (serving)
-        rect = plt.Rectangle((8.5, 4), 3, 1.5, color=fabric_color, ec='black', lw=2, alpha=0.9)
-        ax_arch.add_patch(rect)
-        ax_arch.text(10, 4.75, "Fabric", ha='center', va='center', fontsize=11, fontweight='bold', color='white')
-        ax_arch.text(10, 4.3, "Lakehouse/Warehouse", ha='center', va='center', fontsize=9, color='white')
-        ax_arch.text(10, 3.6, "BI Serving Layer", ha='center', va='center', fontsize=8, style='italic')
-
-        # Layer 4: Power BI (presentation)
-        rect = plt.Rectangle((12, 4), 1.5, 1.5, color=pbi_color, ec='black', lw=2, alpha=0.9)
-        ax_arch.add_patch(rect)
-        ax_arch.text(12.75, 4.75, "Power BI", ha='center', va='center', fontsize=10, fontweight='bold')
-        ax_arch.text(12.75, 4.3, "Reports", ha='center', va='center', fontsize=8)
-
-        # Arrows
-        ax_arch.annotate('', xy=(4.4, 4.75), xytext=(3.6, 4.75),
-                        arrowprops=dict(arrowstyle='->', color='black', lw=2))
-        ax_arch.annotate('', xy=(8.4, 4.75), xytext=(7.6, 4.75),
-                        arrowprops=dict(arrowstyle='->', color='black', lw=2))
-        ax_arch.annotate('', xy=(11.9, 4.75), xytext=(11.6, 4.75),
-                        arrowprops=dict(arrowstyle='->', color='black', lw=2))
-
-        # Annotations
-        ax_arch.text(4, 5.7, "ETL/ELT", ha='center', fontsize=9, fontweight='bold')
-        ax_arch.text(8, 5.7, "Single ETL", ha='center', fontsize=9, fontweight='bold', color=fabric_color)
-        ax_arch.text(11.75, 5.7, "Query", ha='center', fontsize=9, fontweight='bold')
-
-        # Bottom annotations - what happens where
-        ax_arch.text(2, 2.8, "Complex transforms\nBusiness logic\nData quality", ha='center', fontsize=8, color=databricks_color)
-        ax_arch.text(6, 2.8, "Governed exposure\nAccess control\nAudit logging", ha='center', fontsize=8, color=snowflake_color)
-        ax_arch.text(10, 2.8, "Certified models\nDAX measures\nBI optimization", ha='center', fontsize=8, color=fabric_color)
-        ax_arch.text(12.75, 2.8, "Visualization\nSelf-service\nDistribution", ha='center', fontsize=8, color='#B8860B')
-
-        # Key insight box
-        rect = plt.Rectangle((0.5, 0.5), 13, 1.5, color='#F0F0F0', ec='#666666', lw=1)
-        ax_arch.add_patch(rect)
-        ax_arch.text(7, 1.5, "Key Principle: Data transformations stay in Databricks/dbt.", ha='center', fontsize=10, fontweight='bold')
-        ax_arch.text(7, 0.9, "Power BI semantic models handle presentation logic (DAX measures, relationships) — not ETL.", ha='center', fontsize=9)
-
-        plt.tight_layout()
-        st.pyplot(fig_arch)
-        plt.close(fig_arch)
+        st.info(
+            "**Key Principle:** Data transformations stay in Databricks/dbt. "
+            "Power BI semantic models handle presentation logic (DAX measures, relationships) -- not ETL."
+        )
 
         st.divider()
 
-        # ======================================================================
+        # ==================================================================
         # Deployment Pipeline
-        # ======================================================================
+        # ==================================================================
 
-        st.subheader("Fabric Deployment Pipeline: Dev → Prod with PR Gates")
+        st.subheader("Fabric Deployment Pipeline: Dev -> Prod with PR Gates")
 
         st.markdown("""
         We use Fabric's native deployment pipelines with Git integration to ensure all changes
         are reviewed, tested, and traceable.
         """)
 
-        # Draw the deployment pipeline
-        fig_deploy, ax_deploy = plt.subplots(figsize=(14, 7))
-        ax_deploy.set_xlim(0, 14)
-        ax_deploy.set_ylim(0, 7)
-        ax_deploy.axis('off')
-
-        # Colors
-        private_color = "#9E9E9E"
-        dev_color = "#FF9800"
-        prod_color = "#4CAF50"
-        pr_color = "#9C27B0"
-
-        # Private Workspace (analyst sandbox)
-        rect = plt.Rectangle((0.5, 4.5), 2.5, 2),
-        ax_deploy.add_patch(plt.Rectangle((0.5, 4.5), 2.5, 2, color=private_color, ec='black', lw=2, alpha=0.8))
-        ax_deploy.text(1.75, 5.8, "Private Workspace", ha='center', va='center', fontsize=10, fontweight='bold', color='white')
-        ax_deploy.text(1.75, 5.3, "(No Capacity)", ha='center', va='center', fontsize=8, color='white')
-        ax_deploy.text(1.75, 4.8, "Analyst Sandbox", ha='center', va='center', fontsize=8, color='white', style='italic')
-
-        # Dev Workspace
-        ax_deploy.add_patch(plt.Rectangle((4.5, 4.5), 2.5, 2, color=dev_color, ec='black', lw=2, alpha=0.9))
-        ax_deploy.text(5.75, 5.8, "DEV Workspace", ha='center', va='center', fontsize=10, fontweight='bold', color='white')
-        ax_deploy.text(5.75, 5.3, "(Fabric Capacity)", ha='center', va='center', fontsize=8, color='white')
-        ax_deploy.text(5.75, 4.8, "Git Connected", ha='center', va='center', fontsize=8, color='white', style='italic')
-
-        # Prod Workspace
-        ax_deploy.add_patch(plt.Rectangle((9.5, 4.5), 2.5, 2, color=prod_color, ec='black', lw=2, alpha=0.9))
-        ax_deploy.text(10.75, 5.8, "PROD Workspace", ha='center', va='center', fontsize=10, fontweight='bold', color='white')
-        ax_deploy.text(10.75, 5.3, "(Fabric Capacity)", ha='center', va='center', fontsize=8, color='white')
-        ax_deploy.text(10.75, 4.8, "Deployment Pipeline", ha='center', va='center', fontsize=8, color='white', style='italic')
-
-        # PR Gate (using Rectangle instead of FancyBboxPatch for compatibility)
-        ax_deploy.add_patch(plt.Rectangle((7.5, 4.8), 1.5, 1.4, color=pr_color, ec='black', lw=2, alpha=0.9))
-        ax_deploy.text(8.25, 5.7, "PR Gate", ha='center', va='center', fontsize=9, fontweight='bold', color='white')
-        ax_deploy.text(8.25, 5.2, "Senior\nApproval", ha='center', va='center', fontsize=8, color='white')
-
-        # Arrows
-        ax_deploy.annotate('', xy=(4.4, 5.5), xytext=(3.1, 5.5),
-                          arrowprops=dict(arrowstyle='->', color='black', lw=2))
-        ax_deploy.text(3.75, 5.9, "Promote", ha='center', fontsize=8)
-
-        ax_deploy.annotate('', xy=(7.4, 5.5), xytext=(7.1, 5.5),
-                          arrowprops=dict(arrowstyle='->', color='black', lw=2))
-
-        ax_deploy.annotate('', xy=(9.4, 5.5), xytext=(9.1, 5.5),
-                          arrowprops=dict(arrowstyle='->', color='black', lw=2))
-        ax_deploy.text(9.25, 5.9, "Deploy", ha='center', fontsize=8)
-
-        # Git integration indicator
-        ax_deploy.add_patch(plt.Rectangle((4.8, 3.8), 2, 0.5, color='#24292E', ec='black', lw=1))
-        ax_deploy.text(5.8, 4.05, "Git Repo", ha='center', va='center', fontsize=8, color='white')
-        ax_deploy.annotate('', xy=(5.75, 4.4), xytext=(5.75, 4.35),
-                          arrowprops=dict(arrowstyle='<->', color='#24292E', lw=1.5))
-
-        # Workflow description boxes
-        ax_deploy.add_patch(plt.Rectangle((0.3, 1.5), 3, 2), )
-        rect1 = plt.Rectangle((0.3, 1.5), 3, 2, color='#FAFAFA', ec=private_color, lw=2)
-        ax_deploy.add_patch(rect1)
-        ax_deploy.text(1.8, 3.2, "1. Experiment", ha='center', fontsize=9, fontweight='bold', color=private_color)
-        ax_deploy.text(1.8, 2.7, "Analysts build models in", ha='center', fontsize=8)
-        ax_deploy.text(1.8, 2.4, "private workspaces.", ha='center', fontsize=8)
-        ax_deploy.text(1.8, 2.0, "Pro license to share.", ha='center', fontsize=8, style='italic')
-        ax_deploy.text(1.8, 1.7, "No capacity cost.", ha='center', fontsize=8, style='italic')
-
-        rect2 = plt.Rectangle((3.8, 1.5), 3.5, 2, color='#FFF8E1', ec=dev_color, lw=2)
-        ax_deploy.add_patch(rect2)
-        ax_deploy.text(5.55, 3.2, "2. Develop", ha='center', fontsize=9, fontweight='bold', color=dev_color)
-        ax_deploy.text(5.55, 2.7, "Proven products move to", ha='center', fontsize=8)
-        ax_deploy.text(5.55, 2.4, "DEV. Git-tracked changes.", ha='center', fontsize=8)
-        ax_deploy.text(5.55, 2.0, "Integrate into certified", ha='center', fontsize=8, style='italic')
-        ax_deploy.text(5.55, 1.7, "models or create new.", ha='center', fontsize=8, style='italic')
-
-        rect3 = plt.Rectangle((7.8, 1.5), 2.5, 2, color='#F3E5F5', ec=pr_color, lw=2)
-        ax_deploy.add_patch(rect3)
-        ax_deploy.text(9.05, 3.2, "3. Review", ha='center', fontsize=9, fontweight='bold', color=pr_color)
-        ax_deploy.text(9.05, 2.7, "PR required.", ha='center', fontsize=8)
-        ax_deploy.text(9.05, 2.4, "Senior approves.", ha='center', fontsize=8)
-        ax_deploy.text(9.05, 2.0, "Quality gate.", ha='center', fontsize=8, style='italic')
-
-        rect4 = plt.Rectangle((10.8, 1.5), 2.8, 2, color='#E8F5E9', ec=prod_color, lw=2)
-        ax_deploy.add_patch(rect4)
-        ax_deploy.text(12.2, 3.2, "4. Release", ha='center', fontsize=9, fontweight='bold', color=prod_color)
-        ax_deploy.text(12.2, 2.7, "Deploy to PROD via", ha='center', fontsize=8)
-        ax_deploy.text(12.2, 2.4, "Fabric pipeline.", ha='center', fontsize=8)
-        ax_deploy.text(12.2, 2.0, "Free viewers with F64+.", ha='center', fontsize=8, style='italic')
-        ax_deploy.text(12.2, 1.7, "Full audit trail.", ha='center', fontsize=8, style='italic')
-
-        # Title
-        ax_deploy.text(7, 6.8, "Fabric Workspace Deployment Model", ha='center', fontsize=12, fontweight='bold')
-
-        plt.tight_layout()
-        st.pyplot(fig_deploy)
-        plt.close(fig_deploy)
+        # Deployment pipeline flow using styled HTML
+        pipeline_html = """
+        <div style="display:flex;align-items:stretch;gap:6px;flex-wrap:wrap;justify-content:center;margin:20px 0;">
+            <div style="background:#9E9E9E;color:#fff;padding:14px 16px;border-radius:10px;text-align:center;flex:1;min-width:120px;">
+                <div style="font-weight:bold;font-size:13px;">Private</div>
+                <div style="font-size:10px;margin-top:4px;">No Capacity</div>
+                <div style="font-size:9px;font-style:italic;margin-top:2px;">Analyst Sandbox</div>
+            </div>
+            <div style="display:flex;align-items:center;font-size:20px;color:#666;font-weight:bold;">&rarr;</div>
+            <div style="background:#FF9800;color:#fff;padding:14px 16px;border-radius:10px;text-align:center;flex:1;min-width:120px;">
+                <div style="font-weight:bold;font-size:13px;">DEV</div>
+                <div style="font-size:10px;margin-top:4px;">Fabric Capacity</div>
+                <div style="font-size:9px;font-style:italic;margin-top:2px;">Git Connected</div>
+            </div>
+            <div style="display:flex;align-items:center;font-size:20px;color:#666;font-weight:bold;">&rarr;</div>
+            <div style="background:#9C27B0;color:#fff;padding:14px 16px;border-radius:10px;text-align:center;flex:1;min-width:120px;border:3px solid #7B1FA2;">
+                <div style="font-weight:bold;font-size:13px;">PR Gate</div>
+                <div style="font-size:10px;margin-top:4px;">Senior Approval</div>
+                <div style="font-size:9px;font-style:italic;margin-top:2px;">Quality Checkpoint</div>
+            </div>
+            <div style="display:flex;align-items:center;font-size:20px;color:#666;font-weight:bold;">&rarr;</div>
+            <div style="background:#4CAF50;color:#fff;padding:14px 16px;border-radius:10px;text-align:center;flex:1;min-width:120px;">
+                <div style="font-weight:bold;font-size:13px;">PROD</div>
+                <div style="font-size:10px;margin-top:4px;">Fabric Capacity</div>
+                <div style="font-size:9px;font-style:italic;margin-top:2px;">Deployment Pipeline</div>
+            </div>
+        </div>
+        """
+        st.markdown(pipeline_html, unsafe_allow_html=True)
 
         # Workflow explanation
         st.markdown("""
@@ -1624,9 +1463,9 @@ def main():
 
         st.divider()
 
-        # ======================================================================
+        # ==================================================================
         # Certified vs Self-Service Models
-        # ======================================================================
+        # ==================================================================
 
         st.subheader("Certified Models vs. Self-Service: The 80/20 Rule")
 
@@ -1676,7 +1515,7 @@ def main():
         **The graduation path:**
 
         ```
-        Private Workspace (experiment) → Business Approval → DEV (integrate) → PR Review → PROD (certified)
+        Private Workspace (experiment) -> Business Approval -> DEV (integrate) -> PR Review -> PROD (certified)
         ```
 
         This keeps governance tight on the models that matter (certified), while allowing
@@ -1686,9 +1525,9 @@ def main():
 
         st.divider()
 
-        # ======================================================================
+        # ==================================================================
         # DevSecOps with Purview and APIs
-        # ======================================================================
+        # ==================================================================
 
         st.subheader("DevSecOps: Automated Controls with Purview & REST APIs")
 
@@ -1704,7 +1543,7 @@ def main():
             st.markdown("""
             **Sensitivity Labels:**
             - Auto-classify semantic models based on data content
-            - Labels inherit from source (Snowflake → Fabric → Power BI)
+            - Labels inherit from source (Snowflake -> Fabric -> Power BI)
             - Downstream inheritance to reports and dashboards
 
             **Data Loss Prevention (DLP):**
@@ -1757,9 +1596,9 @@ def main():
 
         st.divider()
 
-        # ======================================================================
+        # ==================================================================
         # Tie back to cost
-        # ======================================================================
+        # ==================================================================
 
         st.subheader("Connecting to the Cost Case")
 
@@ -1784,18 +1623,18 @@ def main():
         st.success("""
         **The governance strategy enables the cost savings:**
 
-        1. **Single ETL path** → Lower Snowflake compute costs
-        2. **Certified models on Fabric** → Free viewer access
-        3. **PR-gated deployments** → Quality control reduces rework
-        4. **Automated compliance** → Less manual governance effort
-        5. **Contained sprawl** → Predictable, manageable environment
+        1. **Single ETL path** -> Lower Snowflake compute costs
+        2. **Certified models on Fabric** -> Free viewer access
+        3. **PR-gated deployments** -> Quality control reduces rework
+        4. **Automated compliance** -> Less manual governance effort
+        5. **Contained sprawl** -> Predictable, manageable environment
         """)
 
         st.divider()
 
-        # ======================================================================
+        # ==================================================================
         # Resources
-        # ======================================================================
+        # ==================================================================
 
         with st.expander("Resources & References"):
             st.markdown("""
