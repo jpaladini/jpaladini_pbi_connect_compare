@@ -19,7 +19,8 @@ Author: Data Platform Engineering
 import streamlit as st
 import altair as alt
 import pandas as pd
-from typing import Dict, Any, Tuple, Optional
+import math
+from typing import Dict, Any, Tuple, Optional, List
 from dataclasses import dataclass
 
 
@@ -640,6 +641,198 @@ def render_architecture_html(n_models: int) -> Tuple[str, str]:
 
 
 # =============================================================================
+# DYNAMICAL SYSTEMS MODEL
+# =============================================================================
+
+@dataclass
+class DynamicsParams:
+    """Parameters for the sprawl dynamics ODE model."""
+    demand_rate: float = 3.0          # lambda: new model requests per month
+    sprawl_tendency: float = 0.7      # beta: fraction created ungoverned (0-1)
+    governance_investment: float = 0.3 # sigma: governance effort level (0-1)
+    conversion_rate: float = 0.2      # gamma: conversion rate per unit governance effort
+    carrying_capacity: float = 100.0  # K: org limit on total models
+    sprawl_retirement: float = 0.02   # delta_s: monthly deprecation rate (sprawled)
+    governed_retirement: float = 0.01 # delta_g: monthly deprecation rate (governed)
+    cost_per_sprawled: float = 800.0  # $/model/month (ungoverned)
+    cost_per_governed: float = 200.0  # $/model/month (governed)
+    fabric_fixed_cost: float = 8400.0 # fixed Fabric capacity cost/month
+
+
+def sprawl_derivatives(s: float, g: float, p: DynamicsParams) -> Tuple[float, float]:
+    """
+    Compute dS/dt and dG/dt for the sprawl dynamics model.
+
+    State variables:
+        S = ungoverned/sprawled semantic models
+        G = governed/certified semantic models
+
+    Equations:
+        dS/dt = lambda*beta*(1 - (S+G)/K) - gamma*sigma*S - delta_s*S
+        dG/dt = gamma*sigma*S + lambda*(1-beta)*(1 - (S+G)/K) - delta_g*G
+
+    The first equation says: sprawl grows with demand (modulated by sprawl
+    tendency beta and capacity saturation), but is drained by governance
+    conversion and natural retirement.
+
+    The second equation says: governed models grow from governance conversion
+    of sprawled models, plus directly-governed new models, minus retirement.
+    """
+    total = s + g
+    capacity_factor = max(0.0, 1.0 - total / p.carrying_capacity)
+
+    ds = (
+        p.demand_rate * p.sprawl_tendency * capacity_factor
+        - p.conversion_rate * p.governance_investment * s
+        - p.sprawl_retirement * s
+    )
+
+    dg = (
+        p.conversion_rate * p.governance_investment * s
+        + p.demand_rate * (1.0 - p.sprawl_tendency) * capacity_factor
+        - p.governed_retirement * g
+    )
+
+    return ds, dg
+
+
+def simulate_trajectory(
+    s0: float, g0: float, p: DynamicsParams,
+    dt: float = 0.25, months: int = 60
+) -> pd.DataFrame:
+    """Euler integration of the sprawl dynamics ODE system."""
+    steps = int(months / dt)
+    records = []
+    s, g = float(s0), float(g0)
+
+    for i in range(steps + 1):
+        t = i * dt
+        cost = p.cost_per_sprawled * s + p.cost_per_governed * g
+        if g > 0.5:
+            cost += p.fabric_fixed_cost
+
+        records.append({
+            "Month": round(t, 2),
+            "Sprawled (S)": round(s, 3),
+            "Governed (G)": round(g, 3),
+            "Total": round(s + g, 3),
+            "Monthly Cost ($)": round(cost, 0),
+        })
+
+        ds, dg = sprawl_derivatives(s, g, p)
+        s = max(0.0, s + ds * dt)
+        g = max(0.0, g + dg * dt)
+
+    return pd.DataFrame(records)
+
+
+def compute_vector_field(
+    p: DynamicsParams, s_max: float = 80.0, g_max: float = 80.0,
+    grid_size: int = 15
+) -> pd.DataFrame:
+    """Compute vector field arrows for the phase portrait."""
+    records = []
+    s_step = s_max / grid_size
+    g_step = g_max / grid_size
+    arrow_scale = min(s_step, g_step) * 0.35
+
+    for i in range(grid_size + 1):
+        for j in range(grid_size + 1):
+            s = i * s_step
+            g = j * g_step
+            ds, dg = sprawl_derivatives(s, g, p)
+
+            mag = math.sqrt(ds ** 2 + dg ** 2)
+            if mag > 1e-6:
+                norm = arrow_scale / mag
+                ds_n = ds * norm
+                dg_n = dg * norm
+            else:
+                ds_n = dg_n = 0.0
+
+            records.append({
+                "S": round(s, 2), "G": round(g, 2),
+                "S2": round(s + ds_n, 2), "G2": round(g + dg_n, 2),
+                "magnitude": round(mag, 4),
+            })
+
+    return pd.DataFrame(records)
+
+
+def compute_nullclines(
+    p: DynamicsParams, s_max: float = 80.0, g_max: float = 80.0,
+    num_points: int = 200
+) -> pd.DataFrame:
+    """Compute dS/dt=0 and dG/dt=0 nullclines for the phase portrait."""
+    records: List[dict] = []
+
+    # S-nullcline: solve dS/dt=0 for S as a function of G
+    #   S = lambda*beta*(1 - G/K) / (lambda*beta/K + gamma*sigma + delta_s)
+    denom_s = (
+        p.demand_rate * p.sprawl_tendency / p.carrying_capacity
+        + p.conversion_rate * p.governance_investment
+        + p.sprawl_retirement
+    )
+    if denom_s > 1e-9:
+        for i in range(num_points + 1):
+            g = i * g_max / num_points
+            s = p.demand_rate * p.sprawl_tendency * max(0.0, 1.0 - g / p.carrying_capacity) / denom_s
+            if 0 <= s <= s_max and 0 <= g <= g_max:
+                records.append({"S": round(s, 3), "G": round(g, 3), "Nullcline": "dS/dt = 0"})
+
+    # G-nullcline: solve dG/dt=0 for G as a function of S
+    #   G = (gamma*sigma*S + lambda*(1-beta)*(1 - S/K)) / (lambda*(1-beta)/K + delta_g)
+    denom_g = (
+        p.demand_rate * (1.0 - p.sprawl_tendency) / p.carrying_capacity
+        + p.governed_retirement
+    )
+    if denom_g > 1e-9:
+        for i in range(num_points + 1):
+            s = i * s_max / num_points
+            g = (
+                p.conversion_rate * p.governance_investment * s
+                + p.demand_rate * (1.0 - p.sprawl_tendency) * max(0.0, 1.0 - s / p.carrying_capacity)
+            ) / denom_g
+            if 0 <= s <= s_max and 0 <= g <= g_max:
+                records.append({"S": round(s, 3), "G": round(g, 3), "Nullcline": "dG/dt = 0"})
+
+    return pd.DataFrame(records) if records else pd.DataFrame(columns=["S", "G", "Nullcline"])
+
+
+def compute_bifurcation(p: DynamicsParams, num_sigma: int = 50) -> pd.DataFrame:
+    """Compute equilibria as a function of governance investment sigma."""
+    records = []
+
+    for i in range(num_sigma + 1):
+        sigma = i / num_sigma
+        bp = DynamicsParams(
+            demand_rate=p.demand_rate,
+            sprawl_tendency=p.sprawl_tendency,
+            governance_investment=sigma,
+            conversion_rate=p.conversion_rate,
+            carrying_capacity=p.carrying_capacity,
+            sprawl_retirement=p.sprawl_retirement,
+            governed_retirement=p.governed_retirement,
+            cost_per_sprawled=p.cost_per_sprawled,
+            cost_per_governed=p.cost_per_governed,
+            fabric_fixed_cost=p.fabric_fixed_cost,
+        )
+
+        # Simulate to equilibrium (long enough to converge)
+        traj = simulate_trajectory(30.0, 5.0, bp, dt=0.5, months=120)
+        eq = traj.iloc[-1]
+
+        records.append({
+            "Governance Investment": round(sigma, 2),
+            "Equilibrium Sprawled": round(eq["Sprawled (S)"], 2),
+            "Equilibrium Governed": round(eq["Governed (G)"], 2),
+            "Equilibrium Cost": round(eq["Monthly Cost ($)"], 0),
+        })
+
+    return pd.DataFrame(records)
+
+
+# =============================================================================
 # SCENARIO PRESETS
 # =============================================================================
 
@@ -714,10 +907,11 @@ def main():
     # MAIN TABS
     # ==========================================================================
 
-    tab_cost, tab_arch, tab_strategy = st.tabs([
+    tab_cost, tab_arch, tab_strategy, tab_dynamics = st.tabs([
         "Cost Analysis",
         "Architecture Visualization",
-        "Governance Strategy"
+        "Governance Strategy",
+        "Dynamical Systems Model",
     ])
 
     # ==========================================================================
@@ -1659,6 +1853,585 @@ def main():
             - [Fabric Lifecycle Management Blog](https://blog.fabric.microsoft.com/en-us/blog/microsoft-fabric-lifecycle-management-getting-started-with-git-integration-and-deployment-pipelines/)
             - [Scanner API Enhancements](https://powerbi.microsoft.com/en-my/blog/announcing-scanner-api-admin-rest-apis-enhancements-to-include-dataset-tables-columns-measures-dax-expressions-and-mashup-queries/)
             """)
+
+    # ==========================================================================
+    # TAB 4: DYNAMICAL SYSTEMS MODEL
+    # ==========================================================================
+
+    with tab_dynamics:
+
+        st.header("Sprawl Dynamics: A Differential Equations Model")
+
+        st.markdown("""
+        The other tabs treat model count as a **static parameter** you plug in.
+        This tab asks a different question: *what happens over time* when analysts
+        keep creating new models and governance is (or isn't) applied?
+
+        We model this as a **2-variable autonomous ODE system** -- the same
+        mathematics used in population ecology, epidemiology, and control theory.
+        """)
+
+        # ==================================================================
+        # Model Description
+        # ==================================================================
+
+        with st.expander("The Mathematical Model", expanded=False):
+            st.markdown("""
+            #### State Variables
+
+            - **S(t)** = number of ungoverned / sprawled semantic models at time *t*
+            - **G(t)** = number of governed / certified semantic models at time *t*
+
+            #### System of ODEs
+
+            ```
+            dS/dt = lambda * beta * (1 - (S+G)/K) - gamma * sigma * S - delta_s * S
+            dG/dt = gamma * sigma * S + lambda * (1-beta) * (1 - (S+G)/K) - delta_g * G
+            ```
+
+            | Symbol | Meaning |
+            |--------|---------|
+            | lambda | Demand rate -- new model requests per month |
+            | beta   | Sprawl tendency -- fraction of new models created ungoverned (0-1) |
+            | sigma  | Governance investment -- effort devoted to governance (0-1) |
+            | gamma  | Conversion rate -- how effectively governance converts S -> G |
+            | K      | Carrying capacity -- max total models the org can sustain |
+            | delta_s | Sprawl retirement rate -- monthly deprecation of ungoverned models |
+            | delta_g | Governed retirement rate -- monthly deprecation of governed models |
+
+            #### Interpretation
+
+            - **Term 1 in dS/dt**: New ungoverned models appear at rate `lambda * beta`,
+              limited by logistic carrying capacity `(1 - (S+G)/K)`.
+            - **Term 2 in dS/dt**: Governance converts sprawled models to governed at
+              rate `gamma * sigma * S` (proportional to both investment and current sprawl).
+            - **Term 3 in dS/dt**: Sprawled models naturally retire/deprecate.
+            - **Term 1 in dG/dt**: Governed models gain from governance conversion.
+            - **Term 2 in dG/dt**: Some new models are created directly as governed
+              (fraction `1 - beta`).
+            - **Term 3 in dG/dt**: Governed models retire.
+
+            #### Nullclines and Equilibria
+
+            Setting dS/dt = 0 and dG/dt = 0 gives two curves (nullclines) in the S-G plane.
+            Their intersection is the **equilibrium point** -- where the system settles
+            long-term. The vector field shows how the system flows toward (or away from)
+            equilibrium.
+            """)
+
+        st.divider()
+
+        # ==================================================================
+        # Model Parameters (within tab, not sidebar)
+        # ==================================================================
+
+        st.subheader("Model Parameters")
+
+        p_col1, p_col2, p_col3 = st.columns(3)
+
+        with p_col1:
+            st.markdown("**Demand & Sprawl**")
+            dyn_demand = st.slider(
+                "Demand rate (lambda)", 0.5, 10.0, 3.0, 0.5,
+                help="New model requests per month", key="dyn_demand"
+            )
+            dyn_sprawl = st.slider(
+                "Sprawl tendency (beta)", 0.0, 1.0, 0.7, 0.05,
+                help="Fraction of new models created ungoverned", key="dyn_sprawl"
+            )
+            dyn_capacity = st.slider(
+                "Carrying capacity (K)", 20, 200, 100, 10,
+                help="Max total models the org can sustain", key="dyn_capacity"
+            )
+
+        with p_col2:
+            st.markdown("**Governance Controls**")
+            dyn_sigma = st.slider(
+                "Governance investment (sigma)", 0.0, 1.0, 0.3, 0.05,
+                help="Effort devoted to governance (0 = none, 1 = maximum)", key="dyn_sigma"
+            )
+            dyn_gamma = st.slider(
+                "Conversion rate (gamma)", 0.01, 1.0, 0.2, 0.01,
+                help="Effectiveness of governance at converting S -> G", key="dyn_gamma"
+            )
+            dyn_retire_s = st.slider(
+                "Sprawl retirement (delta_s)", 0.0, 0.1, 0.02, 0.005,
+                help="Monthly deprecation rate for ungoverned models", key="dyn_retire_s"
+            )
+
+        with p_col3:
+            st.markdown("**Starting Conditions**")
+            dyn_s0 = st.slider(
+                "Initial sprawled models (S0)", 0, 80, 20, 1,
+                help="How many ungoverned models you start with", key="dyn_s0"
+            )
+            dyn_g0 = st.slider(
+                "Initial governed models (G0)", 0, 40, 2, 1,
+                help="How many certified models you start with", key="dyn_g0"
+            )
+            dyn_months = st.slider(
+                "Simulation horizon (months)", 12, 120, 60, 6,
+                help="How far into the future to simulate", key="dyn_months"
+            )
+
+        # Build DynamicsParams
+        dyn_params = DynamicsParams(
+            demand_rate=dyn_demand,
+            sprawl_tendency=dyn_sprawl,
+            governance_investment=dyn_sigma,
+            conversion_rate=dyn_gamma,
+            carrying_capacity=float(dyn_capacity),
+            sprawl_retirement=dyn_retire_s,
+        )
+
+        st.divider()
+
+        # ==================================================================
+        # Phase Portrait
+        # ==================================================================
+
+        st.subheader("Phase Portrait")
+        st.markdown("""
+        The **phase portrait** shows the S-G state space. Arrows indicate flow direction.
+        Dashed lines are **nullclines** (where one derivative is zero). Their intersection
+        is the equilibrium. Trajectories show how the system evolves from different
+        starting conditions.
+        """)
+
+        # Compute vector field
+        s_max_plot = min(float(dyn_capacity), 80.0)
+        g_max_plot = min(float(dyn_capacity), 80.0)
+        field_df = compute_vector_field(dyn_params, s_max=s_max_plot, g_max=g_max_plot, grid_size=15)
+
+        # Compute nullclines
+        null_df = compute_nullclines(dyn_params, s_max=s_max_plot, g_max=g_max_plot)
+
+        # Compute trajectories from 3 different starting conditions
+        scenarios = [
+            {"name": "Your scenario", "s0": float(dyn_s0), "g0": float(dyn_g0), "color": "#E74C3C"},
+            {"name": "High sprawl start", "s0": min(50.0, s_max_plot * 0.7), "g0": 2.0, "color": "#F39C12"},
+            {"name": "Fresh start", "s0": 2.0, "g0": 0.0, "color": "#27AE60"},
+        ]
+
+        traj_frames = []
+        start_points = []
+        end_points = []
+
+        for sc in scenarios:
+            traj = simulate_trajectory(sc["s0"], sc["g0"], dyn_params, dt=0.25, months=dyn_months)
+            traj["Scenario"] = sc["name"]
+            traj_frames.append(traj)
+            start_points.append({"S": sc["s0"], "G": sc["g0"], "Scenario": sc["name"]})
+            end_points.append({
+                "S": traj.iloc[-1]["Sprawled (S)"],
+                "G": traj.iloc[-1]["Governed (G)"],
+                "Scenario": sc["name"],
+            })
+
+        all_traj = pd.concat(traj_frames, ignore_index=True)
+        start_df = pd.DataFrame(start_points)
+        end_df = pd.DataFrame(end_points)
+
+        scenario_names = [s["name"] for s in scenarios]
+        scenario_colors = [s["color"] for s in scenarios]
+
+        # --- Build Altair phase portrait ---
+
+        # Layer 1: Vector field arrows
+        arrows = (
+            alt.Chart(field_df)
+            .mark_rule(opacity=0.3, strokeWidth=1)
+            .encode(
+                x=alt.X("S:Q", title="Sprawled Models (S)", scale=alt.Scale(domain=[0, s_max_plot])),
+                y=alt.Y("G:Q", title="Governed Models (G)", scale=alt.Scale(domain=[0, g_max_plot])),
+                x2="S2:Q",
+                y2="G2:Q",
+                color=alt.Color("magnitude:Q", scale=alt.Scale(scheme="blues"), legend=None),
+            )
+        )
+
+        # Layer 2: Nullclines
+        nullcline_chart = alt.Chart()  # empty default
+        if len(null_df) > 0:
+            nullcline_chart = (
+                alt.Chart(null_df)
+                .mark_line(strokeDash=[6, 3], strokeWidth=2, opacity=0.7)
+                .encode(
+                    x="S:Q",
+                    y="G:Q",
+                    color=alt.Color(
+                        "Nullcline:N",
+                        scale=alt.Scale(
+                            domain=["dS/dt = 0", "dG/dt = 0"],
+                            range=["#CC5555", "#5555CC"],
+                        ),
+                        legend=alt.Legend(title="Nullclines", orient="bottom-right"),
+                    ),
+                )
+            )
+
+        # Layer 3: Trajectories
+        traj_chart = (
+            alt.Chart(all_traj)
+            .mark_line(strokeWidth=2.5, opacity=0.85)
+            .encode(
+                x="Sprawled (S):Q",
+                y="Governed (G):Q",
+                color=alt.Color(
+                    "Scenario:N",
+                    scale=alt.Scale(domain=scenario_names, range=scenario_colors),
+                    legend=alt.Legend(title="Trajectories", orient="top-left"),
+                ),
+                order="Month:Q",
+            )
+        )
+
+        # Layer 4: Starting points
+        start_chart = (
+            alt.Chart(start_df)
+            .mark_point(size=120, filled=True, shape="circle", opacity=0.9)
+            .encode(
+                x="S:Q",
+                y="G:Q",
+                color=alt.Color("Scenario:N", scale=alt.Scale(domain=scenario_names, range=scenario_colors), legend=None),
+            )
+        )
+
+        # Layer 5: Equilibrium points (end of trajectories)
+        end_chart = (
+            alt.Chart(end_df)
+            .mark_point(size=200, filled=True, shape="diamond", stroke="black", strokeWidth=1)
+            .encode(
+                x="S:Q",
+                y="G:Q",
+                color=alt.Color("Scenario:N", scale=alt.Scale(domain=scenario_names, range=scenario_colors), legend=None),
+            )
+        )
+
+        phase_portrait = (
+            alt.layer(arrows, nullcline_chart, traj_chart, start_chart, end_chart)
+            .properties(width="container", height=500, title="Phase Portrait: Sprawl vs Governance")
+        )
+
+        st.altair_chart(phase_portrait, use_container_width=True)
+
+        st.caption(
+            "Circles = starting conditions. Diamonds = equilibrium. "
+            "Dashed lines = nullclines (where dS/dt=0 or dG/dt=0). "
+            "Arrows = vector field (direction the system flows)."
+        )
+
+        st.divider()
+
+        # ==================================================================
+        # Time Series
+        # ==================================================================
+
+        st.subheader("Time Evolution")
+        st.markdown("How the number of sprawled and governed models evolves over time.")
+
+        ts_col1, ts_col2 = st.columns(2)
+
+        # Use the user's scenario trajectory
+        user_traj = traj_frames[0]
+
+        with ts_col1:
+            # S(t) and G(t) over time
+            ts_data = user_traj[["Month", "Sprawled (S)", "Governed (G)", "Total"]].melt(
+                id_vars="Month", var_name="Variable", value_name="Count"
+            )
+
+            ts_chart = (
+                alt.Chart(ts_data)
+                .mark_line(strokeWidth=2.5)
+                .encode(
+                    x=alt.X("Month:Q", title="Month"),
+                    y=alt.Y("Count:Q", title="Number of Models"),
+                    color=alt.Color(
+                        "Variable:N",
+                        scale=alt.Scale(
+                            domain=["Sprawled (S)", "Governed (G)", "Total"],
+                            range=["#E74C3C", "#2E86C1", "#7F8C8D"],
+                        ),
+                        legend=alt.Legend(title=None, orient="top"),
+                    ),
+                    strokeDash=alt.StrokeDash(
+                        "Variable:N",
+                        scale=alt.Scale(
+                            domain=["Sprawled (S)", "Governed (G)", "Total"],
+                            range=[[0], [0], [5, 3]],
+                        ),
+                        legend=None,
+                    ),
+                    tooltip=[
+                        alt.Tooltip("Month:Q"),
+                        alt.Tooltip("Variable:N"),
+                        alt.Tooltip("Count:Q", format=".1f"),
+                    ],
+                )
+                .properties(width="container", height=350, title="Model Count Over Time")
+            )
+            st.altair_chart(ts_chart, use_container_width=True)
+
+        with ts_col2:
+            # Cost over time
+            cost_chart = (
+                alt.Chart(user_traj)
+                .mark_area(opacity=0.3, line={"strokeWidth": 2.5, "color": "#8E44AD"}, color="#8E44AD")
+                .encode(
+                    x=alt.X("Month:Q", title="Month"),
+                    y=alt.Y("Monthly Cost ($):Q", title="Monthly Cost (USD)", axis=alt.Axis(format="$,.0f")),
+                    tooltip=[
+                        alt.Tooltip("Month:Q"),
+                        alt.Tooltip("Monthly Cost ($):Q", format="$,.0f"),
+                    ],
+                )
+                .properties(width="container", height=350, title="Cost Trajectory")
+            )
+            st.altair_chart(cost_chart, use_container_width=True)
+
+        # Equilibrium summary
+        eq_s = user_traj.iloc[-1]["Sprawled (S)"]
+        eq_g = user_traj.iloc[-1]["Governed (G)"]
+        eq_cost = user_traj.iloc[-1]["Monthly Cost ($)"]
+        eq_ratio = eq_g / max(eq_s + eq_g, 0.01) * 100
+
+        eq_col1, eq_col2, eq_col3, eq_col4 = st.columns(4)
+        with eq_col1:
+            st.metric("Equilibrium Sprawled", f"{eq_s:.0f} models")
+        with eq_col2:
+            st.metric("Equilibrium Governed", f"{eq_g:.0f} models")
+        with eq_col3:
+            st.metric("Governed Ratio", f"{eq_ratio:.0f}%")
+        with eq_col4:
+            st.metric("Equilibrium Cost", f"${eq_cost:,.0f}/mo")
+
+        st.divider()
+
+        # ==================================================================
+        # Bifurcation Diagram
+        # ==================================================================
+
+        st.subheader("Governance Tipping Point (Bifurcation Diagram)")
+
+        st.markdown("""
+        What happens to the equilibrium as governance investment **sigma** varies from 0 to 1?
+        This is a **bifurcation diagram** -- it reveals the critical governance threshold
+        where the system transitions from sprawl-dominated to governance-dominated.
+        """)
+
+        bif_df = compute_bifurcation(dyn_params)
+
+        bif_col1, bif_col2 = st.columns(2)
+
+        with bif_col1:
+            # Equilibrium model counts vs sigma
+            bif_melt = bif_df[["Governance Investment", "Equilibrium Sprawled", "Equilibrium Governed"]].melt(
+                id_vars="Governance Investment", var_name="Type", value_name="Equilibrium Count"
+            )
+
+            bif_chart = (
+                alt.Chart(bif_melt)
+                .mark_line(strokeWidth=2.5)
+                .encode(
+                    x=alt.X("Governance Investment:Q", title="Governance Investment (sigma)"),
+                    y=alt.Y("Equilibrium Count:Q", title="Equilibrium Model Count"),
+                    color=alt.Color(
+                        "Type:N",
+                        scale=alt.Scale(
+                            domain=["Equilibrium Sprawled", "Equilibrium Governed"],
+                            range=["#E74C3C", "#2E86C1"],
+                        ),
+                        legend=alt.Legend(title=None, orient="top"),
+                    ),
+                    tooltip=[
+                        alt.Tooltip("Governance Investment:Q", format=".2f"),
+                        alt.Tooltip("Type:N"),
+                        alt.Tooltip("Equilibrium Count:Q", format=".1f"),
+                    ],
+                )
+                .properties(width="container", height=350, title="Equilibrium State vs Governance Investment")
+            )
+
+            # Current sigma marker
+            sigma_mark = pd.DataFrame({"x": [dyn_sigma], "label": [f"Current: {dyn_sigma}"]})
+            sigma_rule = (
+                alt.Chart(sigma_mark)
+                .mark_rule(color="gray", strokeDash=[4, 4], strokeWidth=2)
+                .encode(x="x:Q")
+            )
+            sigma_text = (
+                alt.Chart(sigma_mark)
+                .mark_text(align="left", dx=5, dy=-5, fontSize=11, color="gray")
+                .encode(x="x:Q", y=alt.value(15), text="label:N")
+            )
+
+            st.altair_chart(
+                alt.layer(bif_chart, sigma_rule, sigma_text).properties(width="container", height=350),
+                use_container_width=True,
+            )
+
+        with bif_col2:
+            # Equilibrium cost vs sigma
+            cost_bif = (
+                alt.Chart(bif_df)
+                .mark_line(strokeWidth=2.5, color="#8E44AD")
+                .encode(
+                    x=alt.X("Governance Investment:Q", title="Governance Investment (sigma)"),
+                    y=alt.Y("Equilibrium Cost:Q", title="Equilibrium Monthly Cost (USD)", axis=alt.Axis(format="$,.0f")),
+                    tooltip=[
+                        alt.Tooltip("Governance Investment:Q", format=".2f"),
+                        alt.Tooltip("Equilibrium Cost:Q", format="$,.0f"),
+                    ],
+                )
+                .properties(width="container", height=350, title="Equilibrium Cost vs Governance Investment")
+            )
+
+            cost_sigma_rule = (
+                alt.Chart(sigma_mark)
+                .mark_rule(color="gray", strokeDash=[4, 4], strokeWidth=2)
+                .encode(x="x:Q")
+            )
+
+            st.altair_chart(
+                alt.layer(cost_bif, cost_sigma_rule).properties(width="container", height=350),
+                use_container_width=True,
+            )
+
+        # Find the crossover point
+        cross = bif_df[bif_df["Equilibrium Governed"] > bif_df["Equilibrium Sprawled"]]
+        if len(cross) > 0:
+            cross_sigma = cross.iloc[0]["Governance Investment"]
+            st.success(
+                f"**Tipping point at sigma = {cross_sigma:.2f}**: Above this governance investment, "
+                f"governed models outnumber sprawled models at equilibrium. "
+                f"Your current sigma = {dyn_sigma:.2f}."
+            )
+            if dyn_sigma >= cross_sigma:
+                st.info("You are above the tipping point -- governance dominates at equilibrium.")
+            else:
+                st.warning(
+                    f"You are below the tipping point by {cross_sigma - dyn_sigma:.2f}. "
+                    f"Increase governance investment to shift the equilibrium."
+                )
+        else:
+            st.warning(
+                "No governance tipping point found in the current parameter range. "
+                "Try increasing the conversion rate (gamma) or reducing sprawl tendency (beta)."
+            )
+
+        st.divider()
+
+        # ==================================================================
+        # Scenario Comparison
+        # ==================================================================
+
+        st.subheader("Scenario Comparison: No Governance vs Full Governance")
+
+        sc_col1, sc_col2 = st.columns(2)
+
+        # No governance scenario
+        no_gov = DynamicsParams(
+            demand_rate=dyn_demand, sprawl_tendency=dyn_sprawl,
+            governance_investment=0.0, conversion_rate=dyn_gamma,
+            carrying_capacity=float(dyn_capacity), sprawl_retirement=dyn_retire_s,
+        )
+        traj_no_gov = simulate_trajectory(float(dyn_s0), float(dyn_g0), no_gov, dt=0.25, months=dyn_months)
+
+        # Full governance scenario
+        full_gov = DynamicsParams(
+            demand_rate=dyn_demand, sprawl_tendency=dyn_sprawl,
+            governance_investment=1.0, conversion_rate=dyn_gamma,
+            carrying_capacity=float(dyn_capacity), sprawl_retirement=dyn_retire_s,
+        )
+        traj_full_gov = simulate_trajectory(float(dyn_s0), float(dyn_g0), full_gov, dt=0.25, months=dyn_months)
+
+        traj_no_gov["Scenario"] = "No governance (sigma=0)"
+        traj_full_gov["Scenario"] = "Full governance (sigma=1)"
+        user_traj_copy = user_traj.copy()
+        user_traj_copy["Scenario"] = f"Your setting (sigma={dyn_sigma:.2f})"
+
+        compare_df = pd.concat([traj_no_gov, traj_full_gov, user_traj_copy], ignore_index=True)
+
+        with sc_col1:
+            sc_sprawl = (
+                alt.Chart(compare_df)
+                .mark_line(strokeWidth=2)
+                .encode(
+                    x=alt.X("Month:Q", title="Month"),
+                    y=alt.Y("Sprawled (S):Q", title="Sprawled Models"),
+                    color=alt.Color(
+                        "Scenario:N",
+                        scale=alt.Scale(
+                            domain=["No governance (sigma=0)", f"Your setting (sigma={dyn_sigma:.2f})", "Full governance (sigma=1)"],
+                            range=["#E74C3C", "#F39C12", "#27AE60"],
+                        ),
+                        legend=alt.Legend(title=None, orient="top"),
+                    ),
+                )
+                .properties(width="container", height=300, title="Sprawled Models: Three Scenarios")
+            )
+            st.altair_chart(sc_sprawl, use_container_width=True)
+
+        with sc_col2:
+            sc_cost = (
+                alt.Chart(compare_df)
+                .mark_line(strokeWidth=2)
+                .encode(
+                    x=alt.X("Month:Q", title="Month"),
+                    y=alt.Y("Monthly Cost ($):Q", title="Monthly Cost (USD)", axis=alt.Axis(format="$,.0f")),
+                    color=alt.Color(
+                        "Scenario:N",
+                        scale=alt.Scale(
+                            domain=["No governance (sigma=0)", f"Your setting (sigma={dyn_sigma:.2f})", "Full governance (sigma=1)"],
+                            range=["#E74C3C", "#F39C12", "#27AE60"],
+                        ),
+                        legend=alt.Legend(title=None, orient="top"),
+                    ),
+                )
+                .properties(width="container", height=300, title="Cost Trajectory: Three Scenarios")
+            )
+            st.altair_chart(sc_cost, use_container_width=True)
+
+        # Final equilibrium comparison
+        eq_no = traj_no_gov.iloc[-1]
+        eq_full = traj_full_gov.iloc[-1]
+        eq_user = user_traj.iloc[-1]
+
+        savings_vs_no_gov = eq_no["Monthly Cost ($)"] - eq_user["Monthly Cost ($)"]
+        savings_full_gov = eq_no["Monthly Cost ($)"] - eq_full["Monthly Cost ($)"]
+
+        m_col1, m_col2, m_col3 = st.columns(3)
+        with m_col1:
+            st.metric(
+                "No Governance Equilibrium",
+                f"${eq_no['Monthly Cost ($)']:,.0f}/mo",
+                delta=f"{eq_no['Sprawled (S)']:.0f} sprawled",
+                delta_color="inverse",
+            )
+        with m_col2:
+            st.metric(
+                "Your Governance Setting",
+                f"${eq_user['Monthly Cost ($)']:,.0f}/mo",
+                delta=f"-${savings_vs_no_gov:,.0f} vs no governance",
+                delta_color="normal" if savings_vs_no_gov > 0 else "inverse",
+            )
+        with m_col3:
+            st.metric(
+                "Full Governance Equilibrium",
+                f"${eq_full['Monthly Cost ($)']:,.0f}/mo",
+                delta=f"-${savings_full_gov:,.0f} vs no governance",
+                delta_color="normal",
+            )
+
+        st.divider()
+
+        st.caption(
+            "This is a simplified model of organizational dynamics. Real sprawl behavior "
+            "involves stochastic processes, political dynamics, and time-varying parameters. "
+            "The model captures the qualitative behavior: without governance, sprawl dominates; "
+            "above a critical governance threshold, the system tips toward a governed equilibrium."
+        )
 
 
 if __name__ == "__main__":
